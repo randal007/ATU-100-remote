@@ -2,15 +2,12 @@
 #define uart_h
 
 #include "cross_compiler.h"
+#include <stdint.h>
 
 void uart_init(void);
-
-void uartProcessInput(void);
-void uartProcessOutput(void);
-
-char uartGetChar(void);
-
-void uart_str(char *str);
-//void uart_wr_str(char, char, char *, char);
+void uart_putc(char c);
+void uart_str(const char *str);
+bool uart_rx_has(char c);
+char uart_getc(void); // 0 when nothing has arrived
 
 #endif

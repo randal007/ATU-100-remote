@@ -1,5 +1,6 @@
 
 #include "cross_compiler.h"
+#include "uart.h"
 
 // Main.h
 // David Fainitski
@@ -8,7 +9,6 @@
 //
 static char g_c_ind = 0, g_c_cap = 0;
 static char g_c_SW = 0;
-static int g_i_ind = 0, g_i_cap = 0;
 static char g_c_step_cap = 0, g_c_step_ind = 0;
 static char g_c_L_mult = 1, g_c_C_mult = 1;
 int g_i_SWR, g_i_PWR, g_i_P_max, g_i_swr_a;
@@ -16,8 +16,9 @@ static char g_b_rready = 0, g_char_p_cnt = 0;
 
 static char g_b_Overload = 0;
 
-static int e_i_Cap1, e_i_Cap2, e_i_Cap3, e_i_Cap4, e_i_Cap5, e_i_Cap6, e_i_Cap7;
-static int e_i_Ind1, e_i_Ind2, e_i_Ind3, e_i_Ind4, e_i_Ind5, e_i_Ind6, e_i_Ind7;
+/* relay values in pF and nH, from eeprom cells 0x20 and 0x10 */
+static int e_i_Cap[7];
+static int e_i_Ind[7];
 /* booleans indicating whether the inductors and caps are linearly spaced */
 static char e_c_b_L_linear = 0, e_c_b_C_linear = 0;
 /* number of inductors and caps */
@@ -29,6 +30,8 @@ static char e_c_b_L_invert = 0;
 /* in automatic mode, threshold triggering the tuning process if the 
  * SWR is above this level.   in tenths.   so 13 would be an SWR of 1.3 */
 static int e_i_tenths_SWR_Auto_delta;
+/* display off timer: 0 = always on */
+static char e_c_b_Dysp_delay = 0;
 /* feeder loss in tenths of a db.  */
 static char e_c_tenths_Fid_loss;
 /* delay in ms for relays to settle and to take a measurement */
@@ -236,7 +239,9 @@ void get_swr() {
         if (Button(&PORTB, TUNE_BUTTON, 5, BUTTON_RELEASED))
             g_b_rready = 1;
 
-        if ((timeout++ > 7200) || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) { //  press button  Tune
+        // Give up after about a minute, on the Tune button, or when a new
+        // JSON message arrives (it is handled once the tune has stopped)
+        if ((timeout++ > 7200) || uart_rx_has('{') || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
             show_reset();
             g_i_SWR = 0;
             return;

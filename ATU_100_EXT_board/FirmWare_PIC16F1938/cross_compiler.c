@@ -1,7 +1,12 @@
 
 #include "cross_compiler.h"
 
-#pragma config FOSC = 0x04
+// Stock N7DDC fuses, except: watchdog on (the code clears it everywhere,
+// 1 s timeout) and low-voltage programming on, so later updates need no
+// 9 V programming voltage. VCAPEN must stay OFF: RA6 is the serial input.
+#pragma config FOSC = INTOSC, WDTE = ON, PWRTE = ON, MCLRE = ON, CP = OFF, CPD = OFF
+#pragma config BOREN = ON, CLKOUTEN = OFF, IESO = ON, FCMEN = ON
+#pragma config WRT = OFF, VCAPEN = OFF, PLLEN = OFF, STVREN = ON, BORV = HI, LVP = ON
 
 
 #ifdef SIMULATOR
