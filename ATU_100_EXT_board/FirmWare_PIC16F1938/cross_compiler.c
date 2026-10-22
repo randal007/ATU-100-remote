@@ -77,8 +77,9 @@ void Delay_ms(const unsigned int time_in_ms)
 unsigned int ADC_Get_Sample(char channel)
 {
   ADCON0bits.CHS = channel;
-  ADCON0bits.ADGO = 1; /* start A/D */
+  Delay_5_us(); /* acquisition time: let the sampling capacitor follow the new channel */
   Delay_5_us();
+  ADCON0bits.ADGO = 1; /* start A/D */
   while (ADCON0bits.ADGO == 1)
     ;
   unsigned char lower = ADRESL;

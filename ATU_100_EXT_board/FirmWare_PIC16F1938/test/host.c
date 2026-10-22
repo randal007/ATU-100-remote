@@ -106,16 +106,16 @@ static int relays_c(void)
            LATC_r.LATC5 << 4 | LATC_r.LATC1 << 5 | LATC_r.LATC4 << 6;
 }
 
-static double swr_now(void)
+static double swr_for(int lbits, int cbits, int c_out)
 {
     double l = 0, c = 0, w = 2 * M_PI * freq;
     for (int i = 0; i < 7; i++) {
-        if (relays_l() >> i & 1) l += ind_nh[i] * 1e-9;
-        if (relays_c() >> i & 1) c += cap_pf[i] * 1e-12;
+        if (lbits >> i & 1) l += ind_nh[i] * 1e-9;
+        if (cbits >> i & 1) c += cap_pf[i] * 1e-12;
     }
     double complex zl = I * w * l, zin;
     double complex yc = I * w * c;
-    if (LATC_r.LATC0) // C on the antenna side
+    if (c_out) // C on the antenna side
         zin = zl + 1 / (1 / z_load + yc);
     else
         zin = 1 / (1 / (zl + z_load) + yc);
@@ -123,17 +123,45 @@ static double swr_now(void)
     return (1 + g) / (1 - g);
 }
 
+static double swr_now(void)
+{
+    return swr_for(relays_l(), relays_c(), LATC_r.LATC0);
+}
+
+// Lowest SWR any relay combination reaches
+static double swr_best(void)
+{
+    double best = 1e9;
+    for (int sw = 0; sw < 2; sw++)
+        for (int l = 0; l < 128; l++)
+            for (int c = 0; c < 128; c++) {
+                double s = swr_for(l, c, sw);
+                if (s < best) best = s;
+            }
+    return best;
+}
+
+static long adc_reads;
+
 struct misc_bits *adc_hook(void)
 {
     static const double ref[4] = {1024, 1024, 2048, 4096};
     if (misc_r.ADGO) { // conversion started by the previous statement
+        adc_reads++;
         double mv = fwd_mv;
         if (misc_r.CHS == 0 && fwd_mv > 0) { // reverse detector
             double s = swr_now();
             mv = fwd_mv * (s - 1) / (s + 1);
         }
         if (getenv("TRACE_ADC") && misc_r.CHS == 0 && fwd_mv > 0)
-            printf("    adc %.2f s L=%3d C=%3d sw=%d swr=%.2f\n", secs(), relays_l(), relays_c(), LATC_r.LATC0, swr_now());
+            printf("    adc %.2f s L=%3d C=%3d sw=%d swr=%.2f\n", secs(), relays_l(), relays_c(), LATC_r.LATC0,
+                   swr_now() > 99 ? 99 : swr_now());
+        if (getenv("NOISE")) { // percent, roughly gaussian
+            double g = 0;
+            for (int i = 0; i < 6; i++)
+                g += rand() / (double)RAND_MAX - 0.5;
+            mv *= 1 + atof(getenv("NOISE")) / 100 * g * 1.4;
+        }
         int counts = (int)(mv * 1023 / ref[FVRCON & 3]);
         if (counts > 1023) counts = 1023;
         ADRESL = counts & 0xff;
@@ -356,9 +384,70 @@ static void finish(void)
     exit(failures);
 }
 
+void tune(void);
+
+/*  SWEEP=1: tune about a thousand loads across HF and compare with the
+    best match the relays can reach. One line per load in sweep.csv.
+    TUNE_MODE=0 selects N7DDC's original search, NOISE=n adds n% noise
+    to the detector readings. */
+static void sweep(void)
+{
+    static const double mhz[] = {1.85, 3.6, 5.35, 7.1, 10.1, 14.2, 18.1, 21.2, 24.9, 28.5};
+    static const double r[] = {6, 10, 16, 25, 35, 50, 70, 100, 160, 250, 400, 600};
+    static const double x[] = {-400, -200, -100, -50, -20, 0, 20, 50, 100, 200, 400};
+    FILE *f = fopen("sweep.csv", "w");
+    int n = 0, good = 0, near = 0, unmatched = 0;
+    double worst_gap = 0;
+    fprintf(f, "MHz,R,X,start_swr,tuned_swr,best_swr,adc_reads,seconds\n");
+    fwd_mv = 900;
+    for (unsigned i = 0; i < sizeof mhz / sizeof *mhz; i++)
+        for (unsigned j = 0; j < sizeof r / sizeof *r; j++)
+            for (unsigned k = 0; k < sizeof x / sizeof *x; k++) {
+                freq = mhz[i] * 1e6;
+                z_load = r[j] + x[k] * I;
+                if (getenv("LOAD")) {
+                    char want[40];
+                    snprintf(want, sizeof want, "%.2f,%.0f,%.0f", mhz[i], r[j], x[k]);
+                    if (strcmp(want, getenv("LOAD")) != 0)
+                        continue;
+                }
+                double best = swr_best();
+                if (best > 1.5)
+                    continue; // the relays cannot match it anyway
+                double start = swr_for(0, 0, 1);
+                long reads = adc_reads;
+                double t = secs();
+                tune();
+                double tuned = swr_now();
+                if (tuned > 99) tuned = 99; // a real meter stops at 9.99
+                fprintf(f, "%.2f,%.0f,%.0f,%.2f,%.2f,%.2f,%ld,%.2f\n", mhz[i], r[j], x[k], start, tuned, best,
+                        adc_reads - reads, secs() - t);
+                n++;
+                if (tuned < 1.5) good++;
+                if (tuned < best * 1.1 + 0.05) near++;
+                if (tuned >= 2.0) unmatched++;
+                if (tuned - best > worst_gap) worst_gap = tuned - best;
+            }
+    fclose(f);
+    printf("  %d loads the relays can match below SWR 1.5\n", n);
+    printf("  tuned below 1.5:            %d (%.1f%%)\n", good, 100.0 * good / n);
+    printf("  within 10%% of the best:     %d (%.1f%%)\n", near, 100.0 * near / n);
+    printf("  left at SWR 2 or more:      %d (%.1f%%)\n", unmatched, 100.0 * unmatched / n);
+    printf("  worst gap to the best:      %.2f\n", worst_gap);
+    exit(0);
+}
+
 static void scenario(void)
 {
     char what[80];
+    static int in_sweep;
+    if (getenv("SWEEP")) {
+        if (!in_sweep && secs() > 4) {
+            in_sweep = 1;
+            sweep();
+        }
+        return;
+    }
     switch (step) {
     case 0: // boot
         if (!waited(4))
@@ -528,6 +617,8 @@ int main(void)
     if (getenv("DISPLAY_TYPE"))
         eeprom[1] = (unsigned char)atoi(getenv("DISPLAY_TYPE"));
     display_type = eeprom[1];
+    if (getenv("TUNE_MODE"))
+        eeprom[0x36] = (unsigned char)atoi(getenv("TUNE_MODE"));
     misc_r.nTO = 1;
     PORTB_r.v = 0x07; // buttons up
     printf("ATU-100 host test: display type %d, Arduino baud error %+.1f%%\n", display_type, err);

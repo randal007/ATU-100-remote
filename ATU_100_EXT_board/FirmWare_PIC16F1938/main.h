@@ -48,6 +48,8 @@ static char e_c_K_Mult = 32;
 static char e_c_b_Loss_ind = 0;
 /* boolean.  to support Relay off function */
 static char e_c_b_Relay_off = 0;
+/* tuning search: 0 = N7DDC's original, anything else = log grid search */
+static char e_c_tune_mode = 1;
 
 //
 void pic_init(void);
@@ -557,6 +559,100 @@ void sub_tune() {
     return;
 }
 
+
+/*  Search over a logarithmic grid, then refine L and C together.
+    The relay values double from bit to bit, so the relay number is close
+    to linear in uH and pF; a log spaced grid gives small values (high
+    bands) the same relative resolution as large ones (low bands). */
+static const char tune_grid[] = {0, 1, 2, 3, 4, 6, 8, 11, 16, 22, 32, 45, 64, 90, 127};
+static int t_best;
+static char t_best_l, t_best_c, t_best_sw;
+
+// Measure at (l, c); 0 when the tune was cancelled
+static char t_try(char l, char c) {
+    if (l != g_c_ind) set_ind(g_c_ind = l);
+    if (c != g_c_cap) set_cap(g_c_cap = c);
+    get_swr();
+    if (g_i_SWR == 0)
+        return 0;
+    if (g_i_SWR < t_best) { // a new best: measure again, keep the average
+        int first = g_i_SWR;
+        get_swr();
+        if (g_i_SWR == 0)
+            return 0;
+        g_i_SWR = (g_i_SWR + first) / 2;
+    }
+    if (g_i_SWR < t_best) {
+        t_best = g_i_SWR;
+        t_best_l = l;
+        t_best_c = c;
+        t_best_sw = g_c_SW;
+    }
+    return 1;
+}
+
+static void tune_log(void) {
+    char sw, li, ci, rises, row_rises, step, moved;
+    char l_max = 32 * g_c_L_mult - 1, c_max = 32 * g_c_C_mult - 1;
+    int row, last_row;
+
+    t_best = 10000;
+    for (sw = 0; sw < 2; sw++) {
+        set_sw(g_c_SW = !g_c_SW);
+        last_row = 10000;
+        row_rises = 0;
+        for (li = 0; li < sizeof tune_grid && tune_grid[li] <= l_max; li++) {
+            row = 10000;
+            rises = 0;
+            for (ci = 0; ci < sizeof tune_grid && tune_grid[ci] <= c_max; ci++) {
+                if (!t_try(tune_grid[li], tune_grid[ci]))
+                    return;
+                if (g_i_SWR < row) {
+                    row = g_i_SWR;
+                    rises = 0;
+                } else if (g_i_SWR > row + row / 20 && ++rises == 2)
+                    break; // past the dip along C (9.99 everywhere is no dip)
+            }
+            if (t_best < 110)
+                break;
+            // Past the dip along L too: two rows in a row worse than the last
+            if (row > last_row + last_row / 20 && t_best < 999) {
+                if (++row_rises == 2)
+                    break;
+            } else
+                row_rises = 0;
+            last_row = row;
+        }
+        if (t_best <= 130)
+            break; // good enough to refine without trying C on the other side
+    }
+    // Refine around the best point, moving L and C together
+    if (g_c_SW != t_best_sw)
+        set_sw(g_c_SW = t_best_sw);
+    for (step = 4; step;) {
+        signed char dl, dc;
+        moved = 0;
+        for (dl = -1; dl <= 1; dl++)
+            for (dc = -1; dc <= 1; dc++) {
+                int l = t_best_l + dl * step, c = t_best_c + dc * step;
+                char bl = t_best_l, bc = t_best_c;
+                if ((dl | dc) == 0 || l < 0 || c < 0 || l > l_max || c > c_max)
+                    continue;
+                if (!t_try((char)l, (char)c))
+                    return;
+                if (t_best_l != bl || t_best_c != bc)
+                    moved = 1;
+            }
+        if (!moved)
+            step >>= 1;
+        if (t_best < 105)
+            break;
+    }
+    set_ind(g_c_ind = t_best_l);
+    set_cap(g_c_cap = t_best_c);
+    g_i_SWR = t_best;
+}
+
 void tune() {
     CLRWDT();
     //
@@ -578,6 +674,12 @@ void tune() {
     if (e_i_tenths_init_max_swr > 110 & g_i_SWR > e_i_tenths_init_max_swr)
         return;
     //
+    if (e_c_tune_mode != 0) {
+        tune_log();
+        if (g_i_SWR == 0)
+            atu_reset();
+        return;
+    }
     sub_tune();
     if (g_i_SWR == 0) {
         atu_reset();

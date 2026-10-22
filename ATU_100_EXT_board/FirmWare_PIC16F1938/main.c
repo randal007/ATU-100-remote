@@ -157,6 +157,8 @@ void main()
       g_b_Restart = 1;
    pic_init();
    uart_init();
+   if (g_b_Restart)
+      json_event("Restart"); // the watchdog reset the tuner
    //
    Delay_ms(300);
    CLRWDT();
@@ -378,7 +380,7 @@ void button_proc_test(void)
       {
          if (g_b_L & (g_c_ind < 32 * g_c_L_mult - 1))
             set_ind(++g_c_ind);
-         else if (!g_b_L & (g_c_cap < 32 * g_c_L_mult - 1))
+         else if (!g_b_L & (g_c_cap < 32 * g_c_C_mult - 1))
             set_cap(++g_c_cap);
          lcd_ind();
          lcd_pwr();
@@ -788,6 +790,11 @@ static void fmt_pwr(int power)
    }
    else
    { // High power
+      if (power > 9999)
+      {
+         power = 9999;
+         g_b_Overload = 1;
+      }
       IntToStr(power, g_work_str);
       if (power < 999)
       { // 0 - 999 Watt
@@ -850,6 +857,8 @@ void show_pwr(int parm_Power, int parm_SWR)
       {
          if (g_c_ind == 0 & g_c_cap == 0)
             g_i_swr_a = parm_SWR;
+         if (g_i_swr_a < 100)
+            g_i_swr_a = 100; // none saved yet: 0 would divide by zero
          a = 1.0 / ((g_i_swr_a / 100.0 + 100.0 / g_i_swr_a) * e_c_tenths_Fid_loss / 10.0 * 0.115 + 1.0); // Fider loss
          b = 4.0 / (2.0 + parm_SWR / 100.0 + 100.0 / parm_SWR);                         // parm_SWR loss
          if (a >= 1.0)
@@ -921,10 +930,8 @@ void lcd_pwr()
    if (g_i_Power < 10)
       SWR_fixed = 0;
    lcd_swr(SWR_fixed);
-   if (g_i_Power >= 10 & e_c_b_Dysp_delay > 0)
-   {
-      g_i_dysp_delay_counter = c_int_dysp_delay_time;
-   }
+   if (g_i_Power >= 10)
+      wake(); // RF turns the display back on and restarts its off timer
    //
    if (g_b_Auto_mode & (SWR_fixed >= e_i_tenths_SWR_Auto_delta) & ((SWR_fixed > g_i_SWR_fixed_old & (SWR_fixed - g_i_SWR_fixed_old) > delta) | (SWR_fixed<g_i_SWR_fixed_old &(g_i_SWR_fixed_old - SWR_fixed)> delta) | g_i_SWR_fixed_old == 999))
       g_b_Soft_tune = 1;
@@ -1081,6 +1088,7 @@ void cells_init(void)
    e_c_b_Loss_ind = eeprom_read(EEPROM_ADDITIONAL_INDICATION);
    e_c_tenths_Fid_loss = Bcd2Dec(eeprom_read(EEPROM_FEEDER_LOSS));
    e_c_b_Relay_off = Bcd2Dec(eeprom_read(EEPROM_DISABLE_RELAYS));
+   e_c_tune_mode = eeprom_read(EEPROM_TUNE_MODE);
    CLRWDT();
    return;
 }

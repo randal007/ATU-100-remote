@@ -17,4 +17,11 @@ for display in 5 1 0; do
         grep -E "PASSED|FAILED" "log_d${display}_e${err}.txt" | sed "s/^ */display $display, baud $err%: /"
     done
 done
+# Tuning searches over ~1000 loads on 160-10 m with 1% detector noise
+for mode in 0 1; do
+    [ $mode = 0 ] && name="N7DDC original" || name="log grid search"
+    echo "tuning sweep, $name:"
+    TUNE_MODE=$mode NOISE=1 SWEEP=1 DISPLAY_TYPE=0 ./host_test | grep -E "tuned below|left at"
+    cp sweep.csv "sweep_mode$mode.csv"
+done
 exit $status

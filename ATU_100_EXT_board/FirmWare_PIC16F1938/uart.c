@@ -11,7 +11,7 @@
 #include "uart.h"
 
 #define TICKS_PER_BIT 4
-#define RX_LEN 32 /* both lengths must be powers of 2 */
+#define RX_LEN 64 /* both lengths must be powers of 2 */
 #define TX_LEN 128
 
 static volatile uint8_t rx_buf[RX_LEN], rx_in, rx_out;
