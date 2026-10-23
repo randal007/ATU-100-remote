@@ -28,9 +28,14 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 
 - Board: Seeed XIAO ESP32-S3 (U.FL external antenna, native USB, 3 UARTs).
   Full size alternative: ESP32-S3-DevKitC-1U.
-- Power from the tuner's 12 V input: Pololu D24V5F5 buck, or a 7805 for zero
-  switching noise near the detector; ferrite + 10 uF on the tap.
-  Industrial 7-36 V ESP32-S3 boards exist but are credit-card sized.
+- Power: **7805 linear regulator from the tuner's 12 V input** (decided
+  2026-10-22: no switching noise next to the SWR detector). 0.1 uF + 10 uF
+  on each side, ferrite + 10 uF on the 12 V tap, output to the XIAO's 5 V
+  pin. It dissipates about 7 V x current: ~0.6-1 W average (80-150 mA),
+  ~2.5 W during Wi-Fi bursts, so bolt the tab (ground) to the chassis or
+  a small heatsink; bare it would run ~90-100 C in a warm case. Rejected:
+  Pololu D24V5F5 buck (efficient but switching), 7-36 V industrial
+  ESP32-S3 boards (credit-card sized), the tuner's own 78L05 (100 mA).
 - Wiring: tuner RA7 (5 V) -> 2.2k/3.3k divider -> ESP RX; ESP TX -> RA6
   direct, pull-up to 3.3 V; common ground.
 - With the Mega too: ESP32 in the middle (tuner <-> ESP32 <-> Mega).
