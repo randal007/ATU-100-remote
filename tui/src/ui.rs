@@ -69,6 +69,7 @@ pub enum Action {
     AtuChoose(u8),
     AtuSet,
     AtuReset,
+    AtuScroll(u8), // first row of the list to show
     WindingOpen,
     WindingChoose(u8),
     WindingSetMin,
@@ -1150,12 +1151,33 @@ fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         hits.areas.push((Rect { x, y: y0, width: bw, height: 1 }, Action::AtuReset));
     }
 
-    // the list, scrolled to keep the picked cell in view
+    // the list: scrolled by hand (the bar, the wheel), or to keep the
+    // picked cell in view
     let items = cells::items();
     let sel_row = items.iter().position(|it| matches!(it, Item::Cell(i) if *i == a.selected)).unwrap_or(0);
     let visible = list_h as usize;
-    let top = if visible == 0 { 0 } else { sel_row.saturating_sub(visible.saturating_sub(3)).min(items.len().saturating_sub(visible)) };
+    let max_top = items.len().saturating_sub(visible);
+    let follow = if visible == 0 { 0 } else { sel_row.saturating_sub(visible.saturating_sub(3)) };
+    let top = a.scroll.unwrap_or(follow).min(max_top);
+    a.top_drawn.set(top);
     let ly = inner.y + top_h;
+    // a scroll bar on the right, two columns wide for a finger
+    let bar = items.len() > visible && visible > 1;
+    let bar_w: u16 = if bar { 2 } else { 0 };
+    let iw = iw - bar_w as usize;
+    if bar {
+        let bx = inner.x + inner.width - bar_w;
+        let thumb = (visible * visible / items.len()).max(1);
+        let thumb_at = if max_top == 0 { 0 } else { top * (visible - thumb) / max_top };
+        for r in 0..visible {
+            let on = r >= thumb_at && r < thumb_at + thumb;
+            let style = if on { Style::new().fg(BOX_TUNER) } else { Style::new().fg(DIV) };
+            buf.set_string(bx, ly + r as u16, if on { "██" } else { "▕▏" }, style);
+            // a tap or a drag here: this row of the bar becomes the middle of the thumb
+            let to = (r.saturating_sub(thumb / 2) * max_top / (visible - thumb).max(1)).min(max_top);
+            hits.areas.push((Rect { x: bx, y: ly + r as u16, width: bar_w, height: 1 }, Action::AtuScroll(to as u8)));
+        }
+    }
     for (row, it) in items.iter().enumerate().skip(top).take(visible) {
         let y = ly + (row - top) as u16;
         match it {
@@ -1175,16 +1197,12 @@ fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
                 buf.set_string(inner.x + 1, y, if picked { "▸" } else { " " }, base.fg(HI));
                 buf.set_string(inner.x + 3, y, format!("{:02X}", c.cell), base.fg(INACTIVE));
                 buf.set_string(inner.x + 6, y, &name, base.fg(if picked { TITLE } else { MAIN_FG }));
-                let rx = inner.x + inner.width - right.chars().count() as u16;
+                let rx = inner.x + iw as u16 - right.chars().count() as u16;
                 buf.set_string(rx, y, format!("{value}  "), base.fg(TITLE));
                 buf.set_string(rx + value.chars().count() as u16 + 2, y, format!("{raw:>5} "), base.fg(GRAPH_TEXT));
-                hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::AtuPick(*i as u8)));
+                hits.areas.push((Rect { x: inner.x, y, width: iw as u16, height: 1 }, Action::AtuPick(*i as u8)));
             }
         }
-    }
-    if items.len() > visible && visible > 0 {
-        let more = format!(" {}/{} ", sel_row.min(items.len()), items.len());
-        buf.set_string(inner.x + inner.width.saturating_sub(more.len() as u16 + 1), ly + list_h, &more, Style::new().fg(INACTIVE));
     }
 
     // the editor

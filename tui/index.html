@@ -20,7 +20,8 @@
         margin: 0;
       }
       @media (max-width: 700px) { pre { font-size: 13px; } }
-      #screen { position: fixed; inset: 0; }
+      /* no browser panning on the screen: a finger drags atutop's scroll bars */
+      #screen { position: fixed; inset: 0; touch-action: none; }
       #screen_ratzilla_grid:focus { outline: none; }
       /* real text boxes over the settings fields, for phones' keyboards */
       .atu_field {

@@ -351,7 +351,8 @@ drops.
 the ones a PICkit would set, without one once this firmware is in:
 tuning, power and detector, display, relays, and the value of each
 inductor and capacitor. Each row shows the value in plain units and the
-raw bytes as a PICkit shows them (`01 10` = 110 nH). Pick a row, then type
+raw bytes as a PICkit shows them (`01 10` = 110 nH). Drag the bar on the
+right (or tap along it, or use the wheel) to scroll the list. Pick a row, then type
 a number and **set** it, or tap one of the choices. Type in the values you
 measured for a more accurate L and C, or the values of an unusual build.
 The detector winding goes through its warning box. **ATU-100 EXT

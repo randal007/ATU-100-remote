@@ -319,20 +319,53 @@ pub fn main() {
         document.add_event_listener_with_callback("keydown", onkey.as_ref().unchecked_ref()).unwrap();
         onkey.forget();
     }
+    // Pointer events: a finger and a mouse alike; down is a click, moving
+    // while down is a drag (the scroll bar), up ends it
     {
         let (core, overlay) = (core.clone(), overlay.clone());
-        let onmouse = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
+        let down = Rc::new(std::cell::Cell::new(false));
+        let (c, o, d) = (core.clone(), overlay.clone(), down.clone());
+        let ondown = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
             if e.button() != 0 {
                 return;
             }
             let Some((x, y)) = cell_at(e.target()) else { return };
-            let mut c = core.borrow_mut();
+            d.set(true);
+            let mut c = c.borrow_mut();
             let fx = c.mouse(Mouse::Click(x, y));
             effect(fx, &mut c);
-            overlay.borrow_mut().update(&c);
+            o.borrow_mut().update(&c);
         });
-        document.add_event_listener_with_callback("mousedown", onmouse.as_ref().unchecked_ref()).unwrap();
-        onmouse.forget();
+        document.add_event_listener_with_callback("pointerdown", ondown.as_ref().unchecked_ref()).unwrap();
+        ondown.forget();
+        let (c, d) = (core.clone(), down.clone());
+        let onmove = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
+            if !d.get() {
+                return;
+            }
+            // a finger keeps its first target: find what is under it now
+            let doc = web_sys::window().unwrap().document().unwrap();
+            let under = doc.element_from_point(e.client_x() as f32, e.client_y() as f32).map(web_sys::EventTarget::from);
+            if let Some((x, y)) = cell_at(under) {
+                let mut c = c.borrow_mut();
+                let fx = c.mouse(Mouse::Drag(x, y));
+                effect(fx, &mut c);
+            }
+        });
+        document.add_event_listener_with_callback("pointermove", onmove.as_ref().unchecked_ref()).unwrap();
+        onmove.forget();
+        let (c, d) = (core.clone(), down.clone());
+        let onup = Closure::<dyn FnMut()>::new(move || {
+            d.set(false);
+            if let Ok(mut c) = c.try_borrow_mut() {
+                c.mouse(Mouse::Release);
+            }
+        });
+        for kind in ["pointerup", "pointercancel"] {
+            document.add_event_listener_with_callback(kind, onup.as_ref().unchecked_ref()).unwrap();
+        }
+        onup.forget();
+        let _ = overlay;
     }
     {
         let core = core.clone();

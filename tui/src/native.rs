@@ -159,6 +159,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, core: &mut Core, shell: &mut She
             Event::Mouse(m) => {
                 let mouse = match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => Some(Mouse::Click(m.column, m.row)),
+                    MouseEventKind::Drag(MouseButton::Left) => Some(Mouse::Drag(m.column, m.row)),
+                    MouseEventKind::Up(MouseButton::Left) => Some(Mouse::Release),
                     MouseEventKind::ScrollUp => Some(Mouse::WheelUp(m.column, m.row)),
                     MouseEventKind::ScrollDown => Some(Mouse::WheelDown(m.column, m.row)),
                     _ => None,

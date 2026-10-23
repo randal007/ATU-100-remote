@@ -37,6 +37,11 @@ pub struct AtuBox {
     pub edit: String,    // the value being typed for the selected cell
     pub confirm_reset: bool,
     pub notice: Option<(String, bool)>, // text, is it an error
+    /// First row of the list on screen, when scrolled by hand (the bar, the
+    /// wheel); None follows the picked cell
+    pub scroll: Option<usize>,
+    /// First row drawn last time, for the wheel to scroll from
+    pub top_drawn: std::cell::Cell<usize>,
 }
 
 pub struct WindingDialog {
@@ -117,6 +122,9 @@ pub enum Key {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mouse {
     Click(u16, u16),
+    /// Moved with the button held (or a finger down)
+    Drag(u16, u16),
+    Release,
     WheelUp(u16, u16),
     WheelDown(u16, u16),
 }
@@ -235,6 +243,7 @@ impl Outbox {
 
 /// Everything atutop knows and does, apart from the link and the screen
 pub struct Core {
+    dragging: bool, // a scroll bar is being dragged
     pub t: Tuner,
     pub out: Outbox,
     pub app: App,
@@ -249,6 +258,7 @@ impl Core {
     pub fn new(in_browser: bool) -> Core {
         let now = Instant::now();
         Core {
+            dragging: false,
             t: Tuner::new(),
             out: Outbox::new(),
             app: App {
@@ -343,12 +353,30 @@ impl Core {
     }
 
     pub fn mouse(&mut self, m: Mouse) -> Option<Effect> {
-        // the wheel moves through the ATU-100 settings
-        if let (Some(a), Mouse::WheelUp(..) | Mouse::WheelDown(..)) = (&self.app.atu, m) {
+        // the wheel scrolls the ATU-100 settings list
+        if let (Some(a), Mouse::WheelUp(..) | Mouse::WheelDown(..)) = (self.app.atu.as_mut(), m) {
             if self.app.winding.is_none() {
-                let next = if matches!(m, Mouse::WheelUp(..)) { a.selected.saturating_sub(1) } else { (a.selected + 1).min(CELLS.len() - 1) };
-                return self.act(Action::AtuPick(next as u8));
+                let top = a.top_drawn.get();
+                a.scroll = Some(if matches!(m, Mouse::WheelUp(..)) { top.saturating_sub(3) } else { top + 3 });
+                return None;
             }
+        }
+        // Dragging a scroll bar: once it started on the bar, any row the
+        // pointer is on counts, however far it strays sideways
+        match m {
+            Mouse::Release => {
+                self.dragging = false;
+                return None;
+            }
+            Mouse::Drag(_, y) => {
+                if !self.dragging {
+                    return None;
+                }
+                let a = self.hits.areas.iter().find(|(r, a)| r.y == y && matches!(a, Action::AtuScroll(_))).map(|(_, a)| *a);
+                return a.and_then(|a| self.act(a));
+            }
+            Mouse::Click(x, y) => self.dragging = matches!(self.hits.at(x, y), Some(Action::AtuScroll(_))),
+            _ => {}
         }
         let modal = self.app.settings.is_some() || self.app.connect.is_some() || self.app.winding.is_some() || self.app.atu.is_some();
         let over = |r: Option<ratatui::layout::Rect>, x: u16, y: u16| r.is_some_and(|r| y == r.y && x >= r.x && x < r.x + r.width);
@@ -513,9 +541,14 @@ impl Core {
         let a = self.app.atu.as_mut()?;
         match k {
             Key::Esc | Key::Char('e') => Some(Action::AtuClose), // values are numbers: no 'e' in them
-            Key::Up => Some(Action::AtuPick(a.selected.saturating_sub(1) as u8)),
-            Key::Down | Key::Tab => Some(Action::AtuPick((a.selected + 1).min(CELLS.len() - 1) as u8)),
-            Key::BackTab => Some(Action::AtuPick(a.selected.saturating_sub(1) as u8)),
+            Key::Up | Key::BackTab => {
+                a.scroll = None; // the list follows the keys again
+                Some(Action::AtuPick(a.selected.saturating_sub(1) as u8))
+            }
+            Key::Down | Key::Tab => {
+                a.scroll = None;
+                Some(Action::AtuPick((a.selected + 1).min(CELLS.len() - 1) as u8))
+            }
             Key::Enter => Some(Action::AtuSet),
             Key::Backspace => {
                 a.edit.pop();
@@ -799,12 +832,24 @@ impl Core {
             Action::AtuOpen => {
                 app.settings = None;
                 let first = 0;
-                app.atu = Some(AtuBox { selected: first, edit: cells::edit_text(&CELLS[first], t), confirm_reset: false, notice: None });
+                app.atu = Some(AtuBox {
+                    selected: first,
+                    edit: cells::edit_text(&CELLS[first], t),
+                    confirm_reset: false,
+                    notice: None,
+                    scroll: None,
+                    top_drawn: std::cell::Cell::new(0),
+                });
                 if !t.dumped {
                     out.push(r#"{"Dump": "EEPROM"}"#.into());
                 }
             }
             Action::AtuClose => app.atu = None,
+            Action::AtuScroll(top) => {
+                if let Some(a) = app.atu.as_mut() {
+                    a.scroll = Some(top as usize);
+                }
+            }
             Action::AtuPick(i) => {
                 let a = app.atu.as_mut()?;
                 let i = (i as usize).min(CELLS.len() - 1);
