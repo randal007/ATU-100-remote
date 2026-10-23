@@ -340,11 +340,24 @@ used before (`~/.config/atutop/recent`), an address to type, and
 **simulator**: starts the simulated tuner and ESP32 bridge from
 `test/` so everything can be tried without hardware.
 
-**Settings** (`o`): the link, and with an ESP32 bridge its Wi-Fi: scan,
-pick a network, password, IP address from the router or fixed
+**Network settings** (`o`): the link, and with an ESP32 bridge its Wi-Fi:
+scan, pick a network, password, IP address from the router or fixed
 (address, gateway, mask), connect, forget, and **use Wi-Fi** to move
-from USB to Wi-Fi without restarting. Wi-Fi settings change over USB only.
-atutop reconnects by itself when the link drops.
+from USB to Wi-Fi without restarting. Wi-Fi settings change over USB, or
+from the bridge's own hotspot. atutop reconnects by itself when the link
+drops.
+
+**ATU-100 settings** (`e`): every EEPROM cell of [Settings](#settings-eeprom-cells),
+the ones a PICkit would set, without one once this firmware is in:
+tuning, power and detector, display, relays, and the value of each
+inductor and capacitor. Each row shows the value in plain units and the
+raw bytes as a PICkit shows them (`01 10` = 110 nH). Pick a row, then type
+a number and **set** it, or tap one of the choices. Type in the values you
+measured for a more accurate L and C, or the values of an unusual build.
+The detector winding goes through its warning box. **ATU-100 EXT
+defaults** (tap twice) sets N7DDC's values for an EXT board, leaving the
+display cells alone (a wrong display setting blanks the screen). Changes
+take effect at once; display settings restart the display.
 
 **Power and the detector winding:** the power meter's scale follows the
 tandem match winding (cell 31): 0–100 W for the stock 1:10, 0–40 W for 1:5,

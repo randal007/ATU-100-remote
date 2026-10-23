@@ -104,7 +104,7 @@ struct Overlay {
 /// Ratzilla's grid, inside <div id="screen">: one <pre> per row, one <span> per cell
 const GRID: &str = "screen_ratzilla_grid";
 
-const FIELDS: [Field; 5] = [Field::Network, Field::Password, Field::Ip, Field::Gateway, Field::Mask];
+const FIELDS: [Field; 6] = [Field::Network, Field::Password, Field::Ip, Field::Gateway, Field::Mask, Field::AtuValue];
 
 impl Overlay {
     fn new(core: Rc<RefCell<Core>>) -> Rc<RefCell<Overlay>> {
@@ -116,7 +116,7 @@ impl Overlay {
             for (k, v) in [("autocomplete", "off"), ("autocapitalize", "off"), ("autocorrect", "off"), ("spellcheck", "false")] {
                 input.set_attribute(k, v).unwrap();
             }
-            let numeric = matches!(field, Field::Ip | Field::Gateway | Field::Mask);
+            let numeric = matches!(field, Field::Ip | Field::Gateway | Field::Mask | Field::AtuValue);
             input.set_attribute("inputmode", if numeric { "decimal" } else { "text" }).unwrap();
             document.body().unwrap().append_child(&input).unwrap();
 
@@ -173,7 +173,8 @@ impl Overlay {
     fn update(&mut self, core: &Core) {
         let document = web_sys::window().unwrap().document().unwrap();
         let active = document.active_element();
-        let settings = core.app.settings.as_ref().filter(|_| core.may_set_wifi());
+        let showing = core.text_boxes();
+        let selected = core.selected_field();
         // Screen cells are spans in one <pre> per row
         let cell = |x: u16, y: u16| -> Option<web_sys::DomRect> {
             let grid = document.get_element_by_id(GRID)?;
@@ -183,18 +184,18 @@ impl Overlay {
         let mut any_focused = false;
         for (field, input) in &self.boxes {
             let style = input.style();
-            let place = settings.and_then(|s| {
+            let is_active = active.as_ref().is_some_and(|e| e == input.unchecked_ref::<web_sys::Element>());
+            let entry = showing.iter().find(|(f, _, _)| f == field);
+            let place = entry.and_then(|(_, text, password)| {
                 let rect = core.hits.areas.iter().find(|(_, a)| *a == Action::Focus(*field)).map(|(r, _)| *r)?;
                 let (a, b) = (cell(rect.x, rect.y)?, cell(rect.x + rect.width - 1, rect.y)?);
-                Some((s, a, b))
+                Some((text, *password, a, b))
             });
-            let is_active = active.as_ref().is_some_and(|e| e == input.unchecked_ref::<web_sys::Element>());
-            let Some((s, a, b)) = place else {
-                // The box with the keyboard stays while its field is still in
-                // the settings, even if one frame did not draw it: hiding it
+            let Some((text, password, a, b)) = place else {
+                // The box with the keyboard stays while its field is still
+                // showing, even if one frame did not draw it: hiding it
                 // would put the phone's keyboard away
-                let still = settings.is_some_and(|s| s.fields().contains(field));
-                if is_active && still {
+                if is_active && entry.is_some() {
                     continue;
                 }
                 if style.get_property_value("display").unwrap_or_default() != "none" {
@@ -209,18 +210,10 @@ impl Overlay {
             let _ = style.set_property("top", &format!("{}px", a.top()));
             let _ = style.set_property("width", &format!("{}px", b.right() - a.left()));
             let _ = style.set_property("height", &format!("{}px", a.height()));
-            let password = *field == Field::Password && !s.show_pass;
             let kind = if password { "password" } else { "text" };
             if input.type_() != kind {
                 input.set_type(kind);
             }
-            let text = match field {
-                Field::Network => &s.ssid,
-                Field::Password => &s.pass,
-                Field::Ip => &s.ip,
-                Field::Gateway => &s.gateway,
-                Field::Mask => &s.mask,
-            };
             any_focused |= is_active;
             // atutop's text unless the box is being typed in; and the box
             // follows when atutop moves to another field (Tab, a network
@@ -228,13 +221,13 @@ impl Overlay {
             if !is_active && input.value() != *text {
                 input.set_value(text);
             }
-            if s.field == *field && self.focused != Some(*field) && self.focused.is_some() {
+            if selected == Some(*field) && self.focused != Some(*field) && self.focused.is_some() {
                 input.set_value(text);
                 let _ = input.focus();
             }
         }
-        self.focused = settings.filter(|_| any_focused || self.focused.is_some()).map(|s| s.field);
-        if settings.is_none() {
+        self.focused = if any_focused || self.focused.is_some() { selected } else { None };
+        if showing.is_empty() {
             self.focused = None;
         }
     }

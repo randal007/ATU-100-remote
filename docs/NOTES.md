@@ -177,6 +177,11 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    live in <body> (grid id is then screen_ratzilla_grid); viewport
    interactive-widget=resizes-visual; a focused box is never hidden while
    its field is still in the settings; settings compact on short screens.
+   2026-10-23: "settings" renamed "network settings"; new "ATU-100
+   settings" box (e): tui/src/cells.rs describes every documented cell
+   (kind, default, note), encodes typed values to BCD/pairs, defaults
+   skip the display cells (00, 01, 07, 08); a unit test checks the
+   encodings. Cell 02 (auto) is on the main screen, FB-FF are state.
    Was the plan: split tui/
    into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
    shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui

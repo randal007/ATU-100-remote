@@ -63,6 +63,12 @@ pub enum Action {
     OpenWeb,
     HotspotAlways,
     MinToggle,
+    AtuOpen,
+    AtuClose,
+    AtuPick(u8),
+    AtuChoose(u8),
+    AtuSet,
+    AtuReset,
     WindingOpen,
     WindingChoose(u8),
     WindingSetMin,
@@ -259,6 +265,16 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
         ];
         draw_key_list(f, keys, &keys_list, &mut hits);
         hits.areas.retain(|(r, a)| r.y != keys.y || *a != Action::ConnectRefresh || r.x > keys.x + 20); // ↑↓ is not a button
+    } else if app.atu.is_some() {
+        hits = Hits::default(); // the box takes all the clicks while it is open
+        draw_atu(f, body, t, app, &mut hits);
+        let keys_list = [
+            ("Esc", "close", Action::AtuClose, false),
+            ("↑↓", "setting", Action::AtuPick(0), false),
+            ("Enter", "set", Action::AtuSet, false),
+        ];
+        draw_key_list(f, keys, &keys_list, &mut hits);
+        hits.areas.retain(|(r, a)| r.y < keys.y || *a != Action::AtuPick(0)); // ↑↓ on the bar is not a button
     } else if app.settings.is_some() {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_settings(f, body, app, &mut hits);
@@ -578,7 +594,8 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         ("s", "status", Action::Status, false),
         ("v", "detector", Action::Detector, app.detector),
         ("g", "search", Action::Search, false),
-        ("o", "settings", Action::Settings, false),
+        ("o", "network", Action::Settings, false),
+        ("e", "atu-100", Action::AtuOpen, false),
         ("q", "quit", Action::Quit, false),
     ];
     if app.in_browser {
@@ -669,7 +686,7 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     let h = body.height.min(want_h);
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
     f.render_widget(Clear, area);
-    let block = boxed("⁶", "settings", BOX_SETTINGS).title(corner("Esc to close ✕".into(), BOX_SETTINGS));
+    let block = boxed("⁶", "network settings", BOX_SETTINGS).title(corner("Esc to close ✕".into(), BOX_SETTINGS));
     let inner = block.inner(area);
     // a tap on "Esc to close": no keyboard on a phone
     hits.areas.push((Rect { x: area.x + area.width / 2, y: area.y, width: area.width - area.width / 2, height: 1 }, Action::CloseSettings));
@@ -1075,4 +1092,173 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+/// The ATU-100 settings: every EEPROM cell a PICkit would set, in plain
+/// units with the raw bytes beside them, and an editor for the one picked
+fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
+    use crate::cells::{self, Item, Kind as CK, CELLS};
+    let Some(a) = &app.atu else { return };
+    let w = body.width.saturating_sub(2).min(78);
+    let h = body.height;
+    let area = Rect { x: body.x + (body.width - w) / 2, y: body.y, width: w, height: h };
+    f.render_widget(Clear, area);
+    let block = boxed("⁸", "atu-100 settings", BOX_TUNER).title(corner("Esc to close ✕".into(), BOX_TUNER));
+    let inner = block.inner(area);
+    hits.areas.push((Rect { x: area.x + area.width / 2, y: area.y, width: area.width - area.width / 2, height: 1 }, Action::AtuClose));
+    f.render_widget(block, area);
+    let buf = f.buffer_mut();
+    let bottom = inner.y + inner.height;
+    let iw = inner.width as usize;
+    let d = &CELLS[a.selected];
+
+    // the editor at the bottom: name and note, the control, the answer
+    let note_lines = wrap(&format!("{:02X}  {}{}", d.cell, d.name, if d.note.is_empty() { String::new() } else { format!(": {}", d.note) }), iw.saturating_sub(2));
+    let options: Vec<(u8, String)> = match d.kind {
+        CK::Toggle { off, on } => vec![(0, off.to_string()), (1, on.to_string())],
+        CK::Choice(list) => list.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+        _ => vec![],
+    };
+    // option buttons wrap onto rows
+    let mut opt_rows = 1u16;
+    {
+        let mut x = 0usize;
+        for (_, n) in &options {
+            let bw = n.chars().count() + 4;
+            if x > 0 && x + bw > iw.saturating_sub(2) {
+                opt_rows += 1;
+                x = 0;
+            }
+            x += bw + 1;
+        }
+    }
+    let editor_h = 1 + note_lines.len().min(2) as u16 + opt_rows + 1 + 1;
+    let top_h = 1u16; // the defaults line
+    let list_h = inner.height.saturating_sub(editor_h + top_h + 1);
+
+    // defaults
+    let y0 = inner.y;
+    buf.set_stringn(inner.x + 1, y0, "Changes go to the tuner at once.", iw.saturating_sub(2), Style::new().fg(GRAPH_TEXT));
+    let label_reset = if a.confirm_reset { "tap again: defaults" } else { "ATU-100 EXT defaults…" };
+    let bw = label_reset.chars().count() as u16 + 2;
+    if inner.width > bw + 2 {
+        let style_on = a.confirm_reset;
+        let text = format!(" {label_reset} ");
+        let style = if style_on { Style::new().fg(TITLE).bg(HI).add_modifier(Modifier::BOLD) } else { Style::new().fg(TITLE).bg(DIV) };
+        let x = inner.x + inner.width - bw - 1;
+        buf.set_string(x, y0, &text, style);
+        hits.areas.push((Rect { x, y: y0, width: bw, height: 1 }, Action::AtuReset));
+    }
+
+    // the list, scrolled to keep the picked cell in view
+    let items = cells::items();
+    let sel_row = items.iter().position(|it| matches!(it, Item::Cell(i) if *i == a.selected)).unwrap_or(0);
+    let visible = list_h as usize;
+    let top = if visible == 0 { 0 } else { sel_row.saturating_sub(visible.saturating_sub(3)).min(items.len().saturating_sub(visible)) };
+    let ly = inner.y + top_h;
+    for (row, it) in items.iter().enumerate().skip(top).take(visible) {
+        let y = ly + (row - top) as u16;
+        match it {
+            Item::Group(name) => {
+                buf.set_stringn(inner.x + 1, y, *name, iw.saturating_sub(2), Style::new().fg(TITLE).add_modifier(Modifier::BOLD));
+            }
+            Item::Cell(i) => {
+                let c = &CELLS[*i];
+                let picked = *i == a.selected;
+                let value = cells::shown(c, t);
+                let raw = cells::raw(c, t);
+                let right = format!("{value}  {raw:>5} ");
+                let name_w = iw.saturating_sub(right.chars().count() + 7); // a space before the value
+                let name: String = c.name.chars().take(name_w).collect();
+                let base = if picked { Style::new().bg(DIV) } else { Style::new() };
+                buf.set_string(inner.x, y, " ".repeat(iw), base);
+                buf.set_string(inner.x + 1, y, if picked { "▸" } else { " " }, base.fg(HI));
+                buf.set_string(inner.x + 3, y, format!("{:02X}", c.cell), base.fg(INACTIVE));
+                buf.set_string(inner.x + 6, y, &name, base.fg(if picked { TITLE } else { MAIN_FG }));
+                let rx = inner.x + inner.width - right.chars().count() as u16;
+                buf.set_string(rx, y, format!("{value}  "), base.fg(TITLE));
+                buf.set_string(rx + value.chars().count() as u16 + 2, y, format!("{raw:>5} "), base.fg(GRAPH_TEXT));
+                hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::AtuPick(*i as u8)));
+            }
+        }
+    }
+    if items.len() > visible && visible > 0 {
+        let more = format!(" {}/{} ", sel_row.min(items.len()), items.len());
+        buf.set_string(inner.x + inner.width.saturating_sub(more.len() as u16 + 1), ly + list_h, &more, Style::new().fg(INACTIVE));
+    }
+
+    // the editor
+    let mut y = ly + list_h;
+    if y < bottom {
+        buf.set_string(inner.x + 1, y, "─".repeat(iw.saturating_sub(2).saturating_sub(10)), Style::new().fg(DIV));
+    }
+    y += 1;
+    for line in note_lines.iter().take(2) {
+        if y < bottom {
+            buf.set_stringn(inner.x + 1, y, line, iw.saturating_sub(2), Style::new().fg(MAIN_FG));
+        }
+        y += 1;
+    }
+    if y < bottom {
+        let x0 = inner.x + 1;
+        match d.kind {
+            CK::Winding => {
+                button(buf, x0, y, "change the winding…", Action::WindingOpen, true, hits);
+            }
+            CK::Toggle { .. } | CK::Choice(_) => {
+                let now = t.eeprom[d.cell as usize];
+                let (mut x, mut yy) = (x0, y);
+                for (v, n) in &options {
+                    let on = now == Some(*v) || (d.cell == 0x36 && *v == 1 && now.is_some_and(|b| b != 0));
+                    let text = format!(" {} {n} ", if on { "●" } else { "○" });
+                    let bw = text.chars().count() as u16;
+                    if x > x0 && x + bw > inner.x + inner.width - 1 {
+                        yy += 1;
+                        x = x0;
+                    }
+                    if yy < bottom {
+                        let style = if on { Style::new().fg(TITLE).bg(ON_BG).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG).bg(DIV) };
+                        buf.set_string(x, yy, &text, style);
+                        hits.areas.push((Rect { x, y: yy, width: bw, height: 1 }, Action::AtuChoose(*v)));
+                    }
+                    x += bw + 1;
+                }
+                y = yy;
+            }
+            _ => {
+                let unit = match d.kind {
+                    CK::Bcd { unit, .. } | CK::Pair { unit } | CK::Raw { unit } => unit,
+                    _ => "",
+                };
+                let fw = 10u16;
+                let bg = DIV;
+                buf.set_string(x0, y, format!(" {:<w$}", a.edit, w = fw as usize - 1), Style::new().fg(TITLE).bg(bg));
+                buf.set_string(x0 + 1 + a.edit.chars().count() as u16, y, "▏", Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));
+                hits.areas.push((Rect { x: x0, y, width: fw, height: 1 }, Action::Focus(Field::AtuValue)));
+                buf.set_string(x0 + fw + 1, y, unit, Style::new().fg(GRAPH_TEXT));
+                let sx = x0 + fw + 2 + unit.chars().count() as u16;
+                let sw = button(buf, sx, y, "set", Action::AtuSet, true, hits);
+                // the default, for comparison
+                let mut probe = Tuner::new();
+                match d.kind {
+                    CK::Pair { .. } => {
+                        probe.eeprom[d.cell as usize] = Some(((d.default / 100 / 10) << 4 | (d.default / 100 % 10)) as u8);
+                        probe.eeprom[d.cell as usize + 1] = Some(((d.default % 100 / 10) << 4 | (d.default % 10)) as u8);
+                    }
+                    _ => probe.eeprom[d.cell as usize] = Some(d.default as u8),
+                }
+                let def = format!("  default {}", cells::shown(d, &probe));
+                buf.set_stringn(sx + sw, y, &def, (inner.x + inner.width).saturating_sub(sx + sw + 1) as usize, Style::new().fg(INACTIVE));
+            }
+        }
+    }
+    y += 1;
+    if let Some((text, error)) = &a.notice {
+        for line in wrap(text, iw.saturating_sub(2)).into_iter().take(2) {
+            if y < bottom {
+                buf.set_string(inner.x + 1, y, line, Style::new().fg(if *error { RED } else { GREEN }));
+            }
+            y += 1;
+        }
+    }
 }

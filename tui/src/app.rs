@@ -4,6 +4,7 @@
 //! front ends only carry lines in and out, turn their keys and clicks into
 //! `Key` and `Mouse`, and do the few things only they can (`Effect`).
 
+use crate::cells::{self, Kind as CellKind, CELLS};
 use crate::connect;
 use crate::esp::{Esp, PROBE};
 use crate::tuner::{alarm_bcd, Kind, Tuner, CELL_MIN_POWER, CELL_SWR_ALARM, CELL_TUNE_MODE, CELL_WINDING};
@@ -22,11 +23,20 @@ pub struct App {
     pub settings: Option<Settings>,        // the settings box, while it is open
     pub connect: Option<connect::Connect>, // the connect screen, while it is open
     pub winding: Option<WindingDialog>,    // the detector winding box, while open
+    pub atu: Option<AtuBox>,               // the ATU-100 settings box, while open
     /// Which of the bridge's web addresses this computer reaches: None
     /// until checked, Some(None) when none
     pub web_reach: Option<Option<String>>,
     /// Running in a web browser, served by the bridge itself
     pub in_browser: bool,
+}
+
+/// The ATU-100 settings box: the tuner's EEPROM cells
+pub struct AtuBox {
+    pub selected: usize, // in cells::CELLS
+    pub edit: String,    // the value being typed for the selected cell
+    pub confirm_reset: bool,
+    pub notice: Option<(String, bool)>, // text, is it an error
 }
 
 pub struct WindingDialog {
@@ -54,6 +64,7 @@ pub enum Field {
     Ip,
     Gateway,
     Mask,
+    AtuValue, // the ATU-100 settings box's value
 }
 
 impl Settings {
@@ -73,6 +84,7 @@ impl Settings {
             Field::Ip => &mut self.ip,
             Field::Gateway => &mut self.gateway,
             Field::Mask => &mut self.mask,
+            Field::AtuValue => &mut self.mask, // not a network setting: never asked for
         }
     }
 
@@ -81,6 +93,7 @@ impl Settings {
         match f {
             Field::Network => (32, true),
             Field::Password => (63, true),
+            Field::AtuValue => (6, c.is_ascii_digit() || c == '.'),
             _ => (15, c.is_ascii_digit() || c == '.'),
         }
     }
@@ -247,6 +260,7 @@ impl Core {
                 settings: None,
                 connect: None,
                 winding: None,
+                atu: None,
                 web_reach: None,
                 in_browser,
             },
@@ -329,7 +343,14 @@ impl Core {
     }
 
     pub fn mouse(&mut self, m: Mouse) -> Option<Effect> {
-        let modal = self.app.settings.is_some() || self.app.connect.is_some() || self.app.winding.is_some();
+        // the wheel moves through the ATU-100 settings
+        if let (Some(a), Mouse::WheelUp(..) | Mouse::WheelDown(..)) = (&self.app.atu, m) {
+            if self.app.winding.is_none() {
+                let next = if matches!(m, Mouse::WheelUp(..)) { a.selected.saturating_sub(1) } else { (a.selected + 1).min(CELLS.len() - 1) };
+                return self.act(Action::AtuPick(next as u8));
+            }
+        }
+        let modal = self.app.settings.is_some() || self.app.connect.is_some() || self.app.winding.is_some() || self.app.atu.is_some();
         let over = |r: Option<ratatui::layout::Rect>, x: u16, y: u16| r.is_some_and(|r| y == r.y && x >= r.x && x < r.x + r.width);
         let action = match m {
             Mouse::Click(x, y) => self.hits.at(x, y),
@@ -354,6 +375,8 @@ impl Core {
             self.connect_key(k)
         } else if self.app.settings.is_some() {
             self.settings_key(k)
+        } else if self.app.atu.is_some() {
+            self.atu_key(k)
         } else {
             match k {
                 Key::Char('q') | Key::Esc if !self.app.in_browser => Some(Action::Quit),
@@ -367,6 +390,7 @@ impl Core {
                 Key::Char(']') | Key::Char('+') => Some(Action::AlarmUp),
                 Key::Char('[') | Key::Char('-') => Some(Action::AlarmDown),
                 Key::Char('o') | Key::F(2) => Some(Action::Settings),
+                Key::Char('e') => Some(Action::AtuOpen),
                 Key::Char('c') if !self.app.in_browser => Some(Action::ChangeLink),
                 _ => None,
             }
@@ -380,10 +404,47 @@ impl Core {
         self.app.esp.present == Some(true) && self.app.esp.may_set_wifi
     }
 
+    /// The text boxes showing now: which field, its text, and whether it
+    /// is a password (for the browser's real text boxes)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn text_boxes(&self) -> Vec<(Field, String, bool)> {
+        let mut list = vec![];
+        if let Some(s) = self.app.settings.as_ref().filter(|_| self.may_set_wifi()) {
+            for f in s.fields() {
+                let text = match f {
+                    Field::Network => &s.ssid,
+                    Field::Password => &s.pass,
+                    Field::Ip => &s.ip,
+                    Field::Gateway => &s.gateway,
+                    _ => &s.mask,
+                };
+                list.push((*f, text.clone(), *f == Field::Password && !s.show_pass));
+            }
+        }
+        if let Some(a) = self.app.atu.as_ref().filter(|a| cells::typed(&CELLS[a.selected])) {
+            list.push((Field::AtuValue, a.edit.clone(), false));
+        }
+        list
+    }
+
+    /// The field atutop has selected, if a box with fields is open
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn selected_field(&self) -> Option<Field> {
+        if self.app.atu.is_some() {
+            return Some(Field::AtuValue);
+        }
+        self.app.settings.as_ref().map(|s| s.field)
+    }
+
     /// Text typed into the focused settings field (the browser's phone
     /// keyboard sends whole texts)
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub fn set_field_text(&mut self, text: &str) {
+        if let Some(a) = self.app.atu.as_mut() {
+            let (max, _) = Settings::accepts(Field::AtuValue, ' ');
+            a.edit = text.chars().filter(|c| Settings::accepts(Field::AtuValue, *c).1).take(max).collect();
+            return;
+        }
         let Some(s) = self.app.settings.as_mut() else { return };
         let field = s.field;
         let (max, _) = Settings::accepts(field, ' ');
@@ -439,6 +500,31 @@ impl Core {
                 }
                 if field == Field::Network {
                     s.selected = None;
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Keys in the ATU-100 settings: arrows choose a cell, typing goes to
+    /// its value, Enter sends it
+    fn atu_key(&mut self, k: Key) -> Option<Action> {
+        let a = self.app.atu.as_mut()?;
+        match k {
+            Key::Esc | Key::Char('e') => Some(Action::AtuClose), // values are numbers: no 'e' in them
+            Key::Up => Some(Action::AtuPick(a.selected.saturating_sub(1) as u8)),
+            Key::Down | Key::Tab => Some(Action::AtuPick((a.selected + 1).min(CELLS.len() - 1) as u8)),
+            Key::BackTab => Some(Action::AtuPick(a.selected.saturating_sub(1) as u8)),
+            Key::Enter => Some(Action::AtuSet),
+            Key::Backspace => {
+                a.edit.pop();
+                None
+            }
+            Key::Char(c) => {
+                let (max, ok) = Settings::accepts(Field::AtuValue, c);
+                if ok && a.edit.chars().count() < max && cells::typed(&CELLS[a.selected]) {
+                    a.edit.push(c);
                 }
                 None
             }
@@ -544,6 +630,7 @@ impl Core {
             }
             Action::Settings if app.settings.is_some() => app.settings = None,
             Action::Settings => {
+                app.atu = None;
                 let esp = &mut app.esp;
                 app.settings = Some(Settings {
                     field: Field::Network,
@@ -708,6 +795,64 @@ impl Core {
                 }
                 t.high_power = false;
                 t.log(format!("Detector winding set to 1:{}", d.choice), Kind::Warn);
+            }
+            Action::AtuOpen => {
+                app.settings = None;
+                let first = 0;
+                app.atu = Some(AtuBox { selected: first, edit: cells::edit_text(&CELLS[first], t), confirm_reset: false, notice: None });
+                if !t.dumped {
+                    out.push(r#"{"Dump": "EEPROM"}"#.into());
+                }
+            }
+            Action::AtuClose => app.atu = None,
+            Action::AtuPick(i) => {
+                let a = app.atu.as_mut()?;
+                let i = (i as usize).min(CELLS.len() - 1);
+                if i != a.selected || a.edit.is_empty() {
+                    a.selected = i;
+                    a.edit = cells::edit_text(&CELLS[i], t);
+                    a.confirm_reset = false;
+                    a.notice = None;
+                }
+            }
+            Action::AtuChoose(v) => {
+                let a = app.atu.as_mut()?;
+                let d = &CELLS[a.selected];
+                if matches!(d.kind, CellKind::Toggle { .. } | CellKind::Choice(_)) {
+                    t.eeprom[d.cell as usize] = Some(v);
+                    out.push(format!(r#"{{"Set": {}, "Value": {v}}}"#, d.cell));
+                    a.notice = Some((format!("{} set", d.name), false));
+                }
+            }
+            Action::AtuSet => {
+                let a = app.atu.as_mut()?;
+                let d = &CELLS[a.selected];
+                match cells::encode(d, &a.edit) {
+                    Ok(bytes) => {
+                        for (cell, b) in bytes {
+                            t.eeprom[cell as usize] = Some(b);
+                            out.push(format!(r#"{{"Set": {cell}, "Value": {b}}}"#));
+                        }
+                        a.notice = Some((format!("{} set to {}", d.name, cells::shown(d, t)), false));
+                    }
+                    Err(e) => a.notice = Some((format!("{}: {e}", d.name), true)),
+                }
+            }
+            Action::AtuReset => {
+                let a = app.atu.as_mut()?;
+                if !a.confirm_reset {
+                    a.confirm_reset = true;
+                    a.notice = Some(("Tap again to set every cell to the ATU-100 EXT defaults (the display cells stay as they are)".into(), true));
+                } else {
+                    for (cell, b) in cells::defaults() {
+                        t.eeprom[cell as usize] = Some(b);
+                        out.push(format!(r#"{{"Set": {cell}, "Value": {b}}}"#));
+                    }
+                    a.confirm_reset = false;
+                    a.edit = cells::edit_text(&CELLS[a.selected], t);
+                    a.notice = Some(("ATU-100 EXT defaults sent".into(), false));
+                    t.log("ATU-100 settings set to the ATU-100 EXT defaults", Kind::Warn);
+                }
             }
             Action::Quit => return Some(Effect::Quit),
         }

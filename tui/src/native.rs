@@ -22,7 +22,8 @@ Without a PORT it opens the connect screen: USB ports, ESP32 bridges found
 on the network, and the ports used before (kept in ~/.config/atutop/recent).
 
 keys: t tune, b bypass, a auto, r reset, s status, v detector voltages,
-g tuning search, [ ] HighSWR limit, o settings (ESP32 Wi-Fi), c connect
+g tuning search, [ ] HighSWR limit, o network settings (ESP32 Wi-Fi),
+e ATU-100 settings (the EEPROM cells), c connect
 to another port, q or Esc quit. The mouse clicks the buttons, the relays
 and the tuner settings; the wheel on HighSWR changes it.";
 

@@ -7,6 +7,7 @@
 //!                       without one, the connect screen
 
 mod app;
+mod cells;
 mod connect;
 mod esp;
 mod tuner;
