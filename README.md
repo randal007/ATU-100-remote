@@ -162,8 +162,13 @@ the display-off timer (cell 32).
 
 - The tuner sends one JSON object per line.
 - Messages to the tuner are JSON objects, one or more fields, any
-  whitespace: `{"Tune": true}`. Send one command and wait for its answer
-  before the next; the tuner buffers 64 characters while busy.
+  whitespace, **one message per line**: `{"Tune": true}`. The tuner answers
+  within a few ms (it breaks off a measurement when a message starts
+  arriving) and buffers 128 characters. If characters are lost, it drops the
+  damaged message instead of acting on part of it. Waiting for each answer
+  before sending the next command is still the safe way.
+- Straight after power up the first measurement takes about half a second;
+  a status asked for before then shows no power.
 - Single characters outside `{}` work like the buttons, for typing in a
   terminal: `t` tune, `r` reset, `b` bypass on/off, `a` auto on/off,
   `s` status.
@@ -324,7 +329,9 @@ atutop socket://atu100.local:7000
 ```
 
 It works from 80×24 up and takes the port for itself, so it and the Python
-tools cannot talk to the tuner at the same time. It reads the settings and
+tools cannot talk to the tuner at the same time. Commands go out one at a
+time, each after the tuner has answered the last; quick repeats of the same
+setting (a spin of the wheel) are merged into one. It reads the settings and
 relay values from the tuner when it starts (about 6 seconds).
 
 Build it with Rust (stable): `cd tui && cargo build --release`, giving
@@ -470,7 +477,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 14859 of 16384 program words (91%) and 596 of 1024
+The firmware uses 14900 of 16384 program words (91%) and 661 of 1024
 bytes of RAM.
 
 ## Testing without a tuner

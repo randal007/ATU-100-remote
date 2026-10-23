@@ -11,6 +11,7 @@ mod ui;
 use link::{Incoming, Link};
 use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::crossterm::execute;
+use std::collections::VecDeque;
 use std::io::stdout;
 use std::time::{Duration, Instant};
 use tuner::{alarm_bcd, Kind, Tuner, CELL_SWR_ALARM, CELL_TUNE_MODE};
@@ -21,6 +22,54 @@ pub struct App {
     pub link_error: Option<String>,
     pub detector: bool, // ask for detector voltages once a second
     pub started: Instant,
+}
+
+/// Commands wait here and go out one at a time: the tuner reads its serial
+/// port between measurements and has a small buffer.
+struct Outbox {
+    queue: VecDeque<String>,
+    sent_at: Option<Instant>,
+}
+
+/// What a newer command replaces: {"Set": 55, ...} by cell, others by name.
+/// Tune and Reset always go.
+fn replaces(msg: &str) -> Option<&str> {
+    let end = if msg.starts_with(r#"{"Set""#) { msg.find(',')? } else { msg.find(':')? };
+    let key = &msg[..end];
+    (!key.contains("Tune") && !key.contains("Reset")).then_some(key)
+}
+
+impl Outbox {
+    fn push(&mut self, msg: String) {
+        if let Some(key) = replaces(&msg) {
+            self.queue.retain(|m| replaces(m) != Some(key));
+        }
+        self.queue.push_back(msg);
+    }
+
+    /// The tuner said something: ready for the next command
+    fn answered(&mut self) {
+        self.sent_at = None;
+    }
+
+    fn idle(&self) -> bool {
+        self.queue.is_empty() && self.sent_at.is_none()
+    }
+
+    /// Send the next command once the last was answered, or after a second.
+    /// While tuning only Reset goes, to stop it.
+    fn pump(&mut self, link: &mut Link, tuning: bool) {
+        if self.sent_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.sent_at = None;
+        let next_ok = self.queue.front().is_some_and(|m| !tuning || m.contains("Reset"));
+        if next_ok {
+            let msg = self.queue.pop_front().unwrap();
+            link.send(&msg);
+            self.sent_at = Some(Instant::now());
+        }
+    }
 }
 
 const HELP: &str = "atutop: btop-style control of an ATU-100 tuner
@@ -51,12 +100,13 @@ fn main() {
     let mut app = App { port, link_error: None, detector: false, started: Instant::now() };
     let mut t = Tuner::new();
     t.log("Connected, asking for the status and settings", Kind::Info);
-    link.send(r#"{"Status": true}"#);
-    link.send(r#"{"Dump": "EEPROM"}"#);
+    let mut out = Outbox { queue: VecDeque::new(), sent_at: None };
+    out.push(r#"{"Status": true}"#.into());
+    out.push(r#"{"Dump": "EEPROM"}"#.into());
 
     let mut terminal = ratatui::init();
     let _ = execute!(stdout(), EnableMouseCapture);
-    let result = run(&mut terminal, &mut link, &mut t, &mut app);
+    let result = run(&mut terminal, &mut link, &mut out, &mut t, &mut app);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     if let Err(e) = result {
@@ -64,7 +114,7 @@ fn main() {
     }
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, t: &mut Tuner, app: &mut App) -> std::io::Result<()> {
+fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbox, t: &mut Tuner, app: &mut App) -> std::io::Result<()> {
     let mut last_sample = Instant::now();
     let mut last_poll = Instant::now();
     let mut last_raw = Instant::now();
@@ -72,7 +122,10 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, t: &mut Tuner, 
     loop {
         while let Ok(msg) = link.rx.try_recv() {
             match msg {
-                Incoming::Line(line) => t.line(&line),
+                Incoming::Line(line) => {
+                    t.line(&line);
+                    out.answered();
+                }
                 Incoming::Closed(why) => {
                     t.log(format!("Link lost: {why}"), Kind::Bad);
                     app.link_error = Some(why);
@@ -85,14 +138,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, t: &mut Tuner, 
         }
         // The tuner sends a status whenever something changes; ask now and
         // then so a silent link shows up, but not while it is busy
-        if last_poll.elapsed() >= Duration::from_secs(5) && !t.tuning && t.dumped {
+        if last_poll.elapsed() >= Duration::from_secs(5) && !t.tuning && t.dumped && out.idle() {
             last_poll = Instant::now();
-            link.send(r#"{"Status": true}"#);
+            out.push(r#"{"Status": true}"#.into());
         }
-        if app.detector && last_raw.elapsed() >= Duration::from_secs(1) && !t.tuning && t.dumped {
+        if app.detector && last_raw.elapsed() >= Duration::from_secs(1) && !t.tuning && t.dumped && out.idle() {
             last_raw = Instant::now();
-            link.send(r#"{"Raw": true}"#);
+            out.push(r#"{"Raw": true}"#.into());
         }
+        out.pump(link, t.tuning);
 
         terminal.draw(|f| hits = ui::draw(f, t, app))?;
 
@@ -129,23 +183,29 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, t: &mut Tuner, 
         };
         match action {
             Some(Action::Quit) => return Ok(()),
-            Some(a) => act(a, link, t, app),
+            Some(a) => act(a, out, t, app),
             None => {}
         }
     }
 }
 
-fn act(action: Action, link: &mut Link, t: &mut Tuner, app: &mut App) {
+/// Act on a key or click. Switches and relays change on screen at once;
+/// the tuner's status message confirms them.
+fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
     match action {
-        Action::Tune => link.send(r#"{"Tune": true}"#),
-        Action::Reset => link.send(r#"{"Reset": true}"#),
-        Action::Status => link.send(r#"{"Status": true}"#),
-        Action::Bypass => link.send(&format!(r#"{{"Bypass": {}}}"#, !t.bypass)),
+        Action::Tune => out.push(r#"{"Tune": true}"#.into()),
+        Action::Reset => out.push(r#"{"Reset": true}"#.into()),
+        Action::Status => out.push(r#"{"Status": true}"#.into()),
+        Action::Bypass => {
+            t.bypass = !t.bypass;
+            out.push(format!(r#"{{"Bypass": {}}}"#, t.bypass));
+        }
         Action::Auto => {
             if t.bypass {
                 t.log("Auto mode cannot change while in bypass", Kind::Warn);
             } else {
-                link.send(&format!(r#"{{"Auto": {}}}"#, !t.auto));
+                t.auto = !t.auto;
+                out.push(format!(r#"{{"Auto": {}}}"#, t.auto));
             }
         }
         Action::Detector => {
@@ -155,12 +215,22 @@ fn act(action: Action, link: &mut Link, t: &mut Tuner, app: &mut App) {
                 t.rev_mv = None;
             }
         }
-        Action::Ind(i) => link.send(&format!(r#"{{"RelayI": {}}}"#, t.ind_bits ^ 1 << i)),
-        Action::Cap(i) => link.send(&format!(r#"{{"RelayC": {}}}"#, (t.cap_bits ^ 1 << i) as u16 | if t.order_lc { 128 } else { 0 })),
-        Action::Side => link.send(&format!(r#"{{"RelayC": {}}}"#, t.cap_bits as u16 | if t.order_lc { 0 } else { 128 })),
+        Action::Ind(i) => {
+            t.ind_bits ^= 1 << i;
+            out.push(format!(r#"{{"RelayI": {}}}"#, t.ind_bits));
+        }
+        Action::Cap(i) => {
+            t.cap_bits ^= 1 << i;
+            out.push(format!(r#"{{"RelayC": {}}}"#, t.cap_bits as u16 | if t.order_lc { 128 } else { 0 }));
+        }
+        Action::Side => {
+            t.order_lc = !t.order_lc;
+            out.push(format!(r#"{{"RelayC": {}}}"#, t.cap_bits as u16 | if t.order_lc { 128 } else { 0 }));
+        }
         Action::Search => {
             let to_original = t.search_original() != Some(true);
-            link.send(&format!(r#"{{"Set": {CELL_TUNE_MODE}, "Value": {}}}"#, if to_original { 0 } else { 1 }));
+            t.eeprom[CELL_TUNE_MODE] = Some(if to_original { 0 } else { 1 });
+            out.push(format!(r#"{{"Set": {CELL_TUNE_MODE}, "Value": {}}}"#, if to_original { 0 } else { 1 }));
             t.log(if to_original { "Tuning search: N7DDC original" } else { "Tuning search: log grid" }, Kind::Info);
         }
         Action::AlarmUp | Action::AlarmDown => {
@@ -174,9 +244,8 @@ fn act(action: Action, link: &mut Link, t: &mut Tuner, app: &mut App) {
                 now - 0.1
             };
             let value = if next == 0.0 { 0 } else { alarm_bcd(next) };
-            link.send(&format!(r#"{{"Set": {CELL_SWR_ALARM}, "Value": {value}}}"#));
-            // show the new value at once; the tuner's reply confirms it
             t.eeprom[CELL_SWR_ALARM] = Some(value);
+            out.push(format!(r#"{{"Set": {CELL_SWR_ALARM}, "Value": {value}}}"#));
         }
         Action::Quit => {}
     }

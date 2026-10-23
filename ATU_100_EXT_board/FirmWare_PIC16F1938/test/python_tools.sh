@@ -13,7 +13,7 @@ SIM=$!
 trap 'kill $SIM 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 1 50); do [ -s pty_name ] && break; sleep 0.1; done
 PORT=$(cat pty_name)
-sleep 3 # boot
+sleep 5 # boot and a first measurement
 
 atu() { timeout 60 python3 $PY/atu100.py -p "$PORT" --logfile /dev/null "$@" 2>&1; }
 expect() { # what, output, pattern

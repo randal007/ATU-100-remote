@@ -958,8 +958,8 @@ void lcd_pwr()
    // peak detector
    for (peak_cnt = 0; peak_cnt < 120; peak_cnt++)
    {
-      if (button_abort())
-         return;
+      if (button_abort() || uart_rx_message())
+         return; // a button, or a serial message to answer straight away
       get_pwr();
       swr_alarm();
       if (g_i_PWR > p)

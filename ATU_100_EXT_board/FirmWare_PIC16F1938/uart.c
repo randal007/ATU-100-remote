@@ -11,11 +11,12 @@
 #include "uart.h"
 
 #define TICKS_PER_BIT 4
-#define RX_LEN 64 /* both lengths must be powers of 2 */
+#define RX_LEN 128 /* both lengths must be powers of 2 */
 #define TX_LEN 128
 
 static volatile uint8_t rx_buf[RX_LEN], rx_in, rx_out;
 static volatile uint8_t tx_buf[TX_LEN], tx_in, tx_out;
+static volatile uint8_t rx_messages; // '{' received and not yet read
 
 void uart_init(void) {
     UART_OUT_PIN = 1; // idle line is high
@@ -55,6 +56,8 @@ void __interrupt() isr(void) {
             if (UART_IN_PIN && ((rx_in + 1) & (RX_LEN - 1)) != rx_out) {
                 rx_buf[rx_in] = rx_byte;
                 rx_in = (rx_in + 1) & (RX_LEN - 1);
+                if (rx_byte == '{')
+                    rx_messages++;
             }
             rx_bits = 0;
         }
@@ -93,6 +96,12 @@ void uart_str(const char *str) {
         uart_putc(*str++);
 }
 
+// Has a new JSON message started arriving? (Counting the opening brace:
+// a command is acted on before its closing brace has been read.)
+bool uart_rx_message(void) {
+    return rx_messages != 0;
+}
+
 // Is c waiting in the receive buffer?
 bool uart_rx_has(char c) {
     uint8_t i;
@@ -108,5 +117,7 @@ char uart_getc(void) {
         return 0;
     c = rx_buf[rx_out];
     rx_out = (rx_out + 1) & (RX_LEN - 1);
+    if (c == '{')
+        rx_messages--;
     return c;
 }

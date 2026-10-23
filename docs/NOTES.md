@@ -4,25 +4,56 @@ Status and decisions for this branch. The tuner lives inside a homemade
 amplifier run by an Arduino Mega; the goal is one firmware with the display,
 all three buttons and a serial link to the Mega and/or an ESP32.
 
-## Where things stand (2026-10-22)
+## Where things stand (2026-10-23) — resume here
 
 - Firmware on branch `display-buttons-uart` (the fork's default branch):
   display + buttons + serial, bug fixes, log grid tuning search,
   Power/Antenna/Efficiency, `{"Raw":true}`, live settings, `HighSWR` event.
-  14859 of 16384 words.
-- Python tools updated for it and fixed (bypass command, relay side,
-  curses colour crash, hex converter); `test/python_tools.sh` drives them
-  against the simulator.
-- atutop (tui/, Rust + ratatui): btop-style terminal program with power and
-  SWR gauges and graphs, clickable relays and buttons; installed to
-  ~/.local/bin/atutop. Tried against the simulator only.
-- README.md is the full manual (wiring, installing, protocol, every cell,
-  tools, history of the forks).
+  14900 of 16384 words, 661 bytes RAM.
+- 2026-10-23 serial robustness: 128 byte receive buffer; the measuring
+  loop breaks off when a message starts (counting `{`, not `}`: a command
+  is acted on before its `}` is read); damaged messages are dropped (a `{`
+  or line end inside a message resets the parser). Found because spinning
+  the mouse wheel in atutop overflowed the old 64 byte buffer and a
+  garbled message left the parser out of step (endless `Error` events,
+  Auto stuck). The 7-message burst test now lands all 7 with no errors.
+- atutop (tui/, Rust + ratatui): btop-style terminal program; installed to
+  ~/.local/bin/atutop. Commands go through an outbox: one at a time, each
+  after an answer (or 1 s), repeats of the same setting merged, only
+  Reset sent while tuning.
+- Python tools updated and fixed; `test/python_tools.sh` drives them.
+- README.md is the full manual.
 - Tested only in the PC simulator (`test/run.sh`, `test/python_tools.sh`).
   **Never flashed or tried on air yet.**
-- Programmer: PICkit 3, which needs MPLAB X / IPE v6.20 or older.
-- Next: back up the tuner's eeprom, flash, check display/buttons/serial,
-  then compare the two tuning searches on the real antennas (cell 0x36).
+
+### Open, next session
+
+1. **atutop: quick clicks.** A status line the tuner sent just before a
+   click overwrites the click's optimistic value on screen, so a second
+   quick click toggles from the wrong state (8 wheel steps down from 3.0
+   ended at 2.5, not 2.2). Fix: after each incoming line, re-apply the
+   commands still queued and those sent in the last second (parse the
+   message: Auto, Bypass, RelayI, RelayC, Set cell/value).
+2. **Firmware: polls cancel tunes.** While a tune waits for enough power
+   (gaps in SSB speech), any incoming `{` cancels it (get_swr in main.h,
+   `uart_rx_has('{')`). atutop's 5 s status poll would do that. Plan: a
+   `serial_during_tune()` in main.c called from that loop: answer Status
+   and Raw, stop on Reset or Tune, answer anything else with a new `Busy`
+   event. Add a simulator check that polls during a waiting tune.
+3. Then: back up the tuner's EEPROM, flash with the PICkit 3 (MPLAB IPE
+   6.20 or older), check display/buttons/serial, compare the two tuning
+   searches on the real antennas (cell 0x36).
+4. ESP32 bridge firmware, once the parts arrive (below).
+
+### Trying atutop without the tuner
+
+    cd ATU_100_EXT_board/FirmWare_PIC16F1938/test
+    ./run.sh                                  # builds host_test
+    PTY=1 QUIET=1 RF_WAVE=1 ./host_test &     # prints the pty; also in ./pty_name
+    ln -sfn "$(cat pty_name)" /tmp/atu100-sim
+    atutop /tmp/atu100-sim
+
+Stop it with `pkill -x host_test` (not `pkill -f`, which matches the shell).
 
 ## Hardware
 
@@ -33,18 +64,20 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 - PROG header (MCLR, +5V, GND, DAT, CLK) doubles as the display connector.
 - The tuner's 5 V is a 78L05 (100 mA): power nothing extra from it.
 
-## ESP32 plan (not started)
+## ESP32 plan (not started; parts being ordered 2026-10-23)
 
-- Board: Seeed XIAO ESP32-S3 (U.FL external antenna, native USB, 3 UARTs).
-  Full size alternative: ESP32-S3-DevKitC-1U.
+- Board: **Seeed Studio XIAO ESP32S3, part number 113991114** (U.FL
+  antenna included, native USB, 3 UARTs). Not the "Sense" version, which
+  adds a camera. Full size alternative: ESP32-S3-DevKitC-1U.
 - Power: **7805 linear regulator from the tuner's 12 V input** (decided
-  2026-10-22: no switching noise next to the SWR detector). 0.1 uF + 10 uF
-  on each side, ferrite + 10 uF on the 12 V tap, output to the XIAO's 5 V
-  pin. It dissipates about 7 V x current: ~0.6-1 W average (80-150 mA),
-  ~2.5 W during Wi-Fi bursts, so bolt the tab (ground) to the chassis or
-  a small heatsink; bare it would run ~90-100 C in a warm case. Rejected:
-  Pololu D24V5F5 buck (efficient but switching), 7-36 V industrial
-  ESP32-S3 boards (credit-card sized), the tuner's own 78L05 (100 mA).
+  2026-10-22: no switching noise next to the SWR detector). He is ordering
+  a ready-made 7805 module with the capacitors on it. Check it is a real
+  LM7805/L7805 (TO-220, linear): "7805 replacement" modules such as Recom
+  R-78 are switching regulators. It drops about 1 W (0.6-1 W average,
+  ~2.5 W in Wi-Fi bursts): heatsink or bolt to the chassis. Ferrite +
+  10 uF on the 12 V tap, output to the XIAO's 5 V pin. Rejected: Pololu
+  D24V5F5 buck (switching), 7-36 V industrial ESP32-S3 boards (big), the
+  tuner's own 78L05 (100 mA).
 - Wiring: tuner RA7 (5 V) -> 2.2k/3.3k divider -> ESP RX; ESP TX -> RA6
   direct, pull-up to 3.3 V; common ground.
 - With the Mega too: ESP32 in the middle (tuner <-> ESP32 <-> Mega).

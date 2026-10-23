@@ -101,6 +101,12 @@ static void store(char *str, char rx)
 
 json_rx_result_t json_rx_process(char rx)
 {
+    // One message per line. A { or a line end inside a message means
+    // characters were lost: drop the rest of it rather than act on half
+    if (json_rx_state != JRS_START_WAIT && (rx == '{' || rx == '\n' || rx == '\r')) {
+        json_rx_state = (rx == '{') ? JRS_NAME_WAIT : JRS_START_WAIT;
+        return JRR_NO_DATA;
+    }
     switch (json_rx_state) {
     case JRS_START_WAIT:
         if (rx != '{')
