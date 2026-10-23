@@ -931,7 +931,11 @@ fn draw_connect(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
             let picked = i == c.selected && !c.typing;
             let mark = if picked { "▸ " } else { "  " };
             let style = if picked { Style::new().fg(TITLE).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG) };
-            let port = if e.kind == K::Sim { "simulator".to_string() } else { e.port.clone() };
+            let port = match e.port.as_str() {
+                crate::connect::SIM => "simulator".to_string(),
+                crate::connect::SIM_LAN => "simulator + phone".to_string(),
+                _ => e.port.clone(),
+            };
             let mut line = vec![
                 Span::raw("  "),
                 Span::styled(mark, Style::new().fg(HI)),

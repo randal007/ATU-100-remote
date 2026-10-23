@@ -25,6 +25,7 @@ pub enum Kind {
 }
 
 pub const SIM: &str = "sim:";
+pub const SIM_LAN: &str = "sim-lan:"; // the simulator, reachable from a phone too
 
 pub struct Entry {
     pub port: String,
@@ -195,6 +196,11 @@ impl Connect {
                 what: "pretend tuner and ESP32 bridge, no hardware".into(),
                 kind: Kind::Sim,
             });
+            self.entries.push(Entry {
+                port: SIM_LAN.into(),
+                what: "the same, its web page open to phones on this network".into(),
+                kind: Kind::Sim,
+            });
         }
         // start on the last one used, when it is here
         let keep = keep.or_else(|| (!self.current.is_empty()).then(|| self.current.clone())).or_else(|| recent().into_iter().next());
@@ -298,7 +304,8 @@ fn spawn_until(cmd: &mut Command, prefix: &'static str) -> Result<(Child, String
 }
 
 impl Simulator {
-    pub fn start() -> Result<Simulator, String> {
+    /// `lan`: its web page reachable from the home network (a phone)
+    pub fn start(lan: bool) -> Result<Simulator, String> {
         let dir = sim_dir().ok_or("the simulator is not built: run test/run.sh")?;
         let (tuner, tuner_port) = spawn_until(
             Command::new(dir.join("host_test")).current_dir(&dir).env("PTY", "1").env("QUIET", "1").env("RF_WAVE", "1"),
@@ -307,6 +314,7 @@ impl Simulator {
         let mut sim = Simulator { children: vec![tuner], link: std::env::temp_dir().join(format!("atutop-sim-{}", std::process::id())), port: String::new() };
         let (esp, _) = spawn_until(
             Command::new("python3")
+                .env("ATU100_SIM_LAN", if lan { "1" } else { "0" })
                 .arg(dir.join("esp32_sim.py"))
                 .arg(&tuner_port)
                 .arg(&sim.link)

@@ -21,6 +21,11 @@ where to connect. A fixed IP address is kept and reported, but the bridge
 stays on 127.0.0.1 here. Pretend networks: VE7NHW-shack (password hamradio),
 two others with unknown passwords, and an open one.
 
+ATU100_SIM_LAN=1: listen on the home network too, so a phone on the same
+network can open the web page at http://THIS_COMPUTER:8080/ (the firewall
+must let 8080 and 8081 in); the bridge then reports this computer's
+network address as its own.
+
 --watch: started by atutop, which passes the simulated tuner's process id.
 When atutop goes (even without quitting properly) this stops the tuner,
 removes USB_LINK and ends.
@@ -47,6 +52,23 @@ VERSION = 'sim'
 PORT = 7000
 FIND_PORT = 7001
 WEB_PORT = 8080  # the real bridge uses 80 and 81; below 1024 needs root here
+LAN = os.environ.get('ATU100_SIM_LAN') == '1'
+LISTEN = '0.0.0.0' if LAN else '127.0.0.1'
+
+
+def lan_address():
+    """This computer's address on the home network (no packet is sent)"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('192.0.2.1', 9))  # any outside address: picks the outgoing interface
+        return s.getsockname()[0]
+    except OSError:
+        return '127.0.0.1'
+    finally:
+        s.close()
+
+
+ADDRESS = lan_address() if LAN else '127.0.0.1'  # where the bridge says it is
 HOST = 'atu100.local'
 HOTSPOT = 'ATU100-setup'
 HOTSPOT_IP = '192.168.73.1'  # pretend: nothing listens there on this PC
@@ -172,7 +194,7 @@ class Bridge:
             if self.port == FIND_PORT:
                 continue
             try:
-                self.server.bind(('127.0.0.1', self.port))
+                self.server.bind((LISTEN, self.port))
                 break
             except OSError:
                 continue
@@ -185,8 +207,8 @@ class Bridge:
             self.ws_server = socket.socket()
             self.ws_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                self.ws_server.bind(('127.0.0.1', self.ws_port))
-                self.web = http.server.ThreadingHTTPServer(('127.0.0.1', self.web_port), self.page_handler())
+                self.ws_server.bind((LISTEN, self.ws_port))
+                self.web = http.server.ThreadingHTTPServer((LISTEN, self.web_port), self.page_handler())
                 break
             except OSError:
                 self.ws_server.close()
@@ -201,6 +223,8 @@ class Bridge:
             pass
         os.symlink(path, usb_link)
         print(f'USB port: {path} (linked at {usb_link}), bridge port {self.port}, web page port {self.web_port}', flush=True)
+        if LAN:
+            print(f'from a phone on this network: http://{ADDRESS}:{self.web_port}/', flush=True)
         self.server.setblocking(False)
         self.sel.register(self.server, selectors.EVENT_READ, 'server')
         self.sel.register(self.ws_server, selectors.EVENT_READ, 'ws_server')
@@ -305,7 +329,7 @@ class Bridge:
             'ESP32': 'Info', 'Version': VERSION,
             'WiFi': self.state,
             'SSID': self.saved[0] if self.saved else '',
-            'IP': '127.0.0.1' if connected else '',
+            'IP': ADDRESS if connected else '',
             'RSSI': next((n[1] for n in NETWORKS if self.saved and n[0] == self.saved[0]), 0) if connected else 0,
             'Host': HOST, 'Port': self.port,
             'Web': connected or self.hotspot, 'WebPort': self.web_port,
@@ -401,7 +425,7 @@ class Bridge:
                     except ValueError:
                         continue
                     if isinstance(ask, dict) and ask.get('ESP32') == 'Find' and self.state == 'Connected':
-                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': '127.0.0.1', 'Port': self.port,
+                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': ADDRESS, 'Port': self.port,
                                 'Host': HOST, 'SSID': self.saved[0]}
                         self.finder.sendto(json.dumps(here, separators=(',', ':')).encode(), addr)
                 elif what == 'tuner':

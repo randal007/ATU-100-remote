@@ -616,6 +616,10 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   (USB port, TCP, the search, Wi-Fi settings, and atutop's browser version
   with its WebSocket when `tui/dist` is built): web page on port 8080 and
   WebSocket on 8081 (the real bridge: 80 and 81), or the next free pair.
+  With `ATU100_SIM_LAN=1` (atutop's **simulator + phone**) it listens on
+  the home network too, so a phone on the same network can open
+  `http://THIS_COMPUTER:8080/`; the firewall must let 8080 and 8081 in,
+  e.g. `sudo ufw allow from 192.168.88.0/24 to any port 8080:8081 proto tcp`.
   atutop's connect screen starts both: **simulator**.
 
 The simulator cannot check the real I2C display timing, the interrupt's

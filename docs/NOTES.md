@@ -166,6 +166,11 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    so nothing answers after the window manager resizes the page (he hit
    it). web.rs listens on the document instead and finds the clicked cell
    from the <span> under the pointer. Could be reported upstream.
+   Simulator on fixed ports 8080/8081 (then 8082/8083...). "simulator +
+   phone" on the connect screen = ATU100_SIM_LAN=1: listens on 0.0.0.0,
+   reports this PC's LAN address (192.168.88.5). ufw rule added 2026-10-23
+   with his OK: 8080:8081/tcp from 192.168.88.0/24, comment "ATU-100
+   simulator web page (atutop)"; remove with `sudo ufw delete` if unwanted.
    Was the plan: split tui/
    into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
    shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui

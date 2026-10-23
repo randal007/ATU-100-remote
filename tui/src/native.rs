@@ -221,13 +221,17 @@ fn reopen(core: &mut Core, shell: &mut Shell) {
     let Some(mut port) = shell.switch_to.take().or_else(|| retry.then(|| core.app.port.clone())) else { return };
     shell.last_retry = Instant::now();
     // The simulator: start it, then connect to its ESP32 bridge
-    if port == connect::SIM {
+    if port == connect::SIM || port == connect::SIM_LAN {
+        let lan = port == connect::SIM_LAN;
         shell.sim = None; // a fresh one
-        match connect::Simulator::start() {
+        match connect::Simulator::start(lan) {
             Ok(sim) => {
                 port = sim.port.clone();
                 shell.sim = Some(sim);
                 core.t.log("Simulator started: a pretend tuner and ESP32 bridge", Kind::Info);
+                if lan {
+                    core.t.log("Its web page opens to phones once the bridge is on Wi-Fi: see the top line", Kind::Info);
+                }
             }
             Err(e) => {
                 if let Some(c) = core.app.connect.as_mut() {
