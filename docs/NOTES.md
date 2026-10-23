@@ -37,12 +37,32 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 - Tested only in the PC simulator (`test/run.sh`, `test/python_tools.sh`).
   **Never flashed or tried on air yet.**
 
+- 2026-10-23 evening: ESP32 bridge groundwork, all simulated.
+  Board now **Seeed XIAO ESP32S3 Plus**. Decisions: Wi-Fi settings change
+  over USB only; hotspot `ATU100-setup` (setup page 192.168.4.1) when no
+  network is saved or it cannot join one. Bridge protocol (flat JSON, one
+  line per message, only sent when asked; the tuner ignores `ESP32`
+  messages, so the probe is harmless without a bridge):
+  `{"ESP32":"Info"}` -> Info with Version, Client (USB/WiFi), WiFi
+  (Off/Connecting/Connected/Failed), SSID, IP, RSSI, Host, Port, Hotspot,
+  HotspotName, StaticIP, Gateway, Mask; `Scan` -> one `Net` line per
+  network then `Scan` Count; `WiFi` SSID [Pass: omitted keeps the saved
+  one] IP ("" = DHCP) Gateway Mask -> OK; `Forget` -> OK; errors as
+  `{"ESP32":"Error","Text":...}`; UDP 7001 `Find` -> `Here` IP Port Host
+  SSID. TCP bridge on port 7000. Reference: test/esp32_sim.py.
+- atutop: connect screen (USB by VID, network search, recent ports,
+  address, simulator start), settings box (`o`) with Wi-Fi and fixed IP,
+  use Wi-Fi, auto reconnect. Files tui/src/connect.rs, esp.rs.
+
 ### Open, next session
 
 1. Back up the tuner's EEPROM, flash with the PICkit 3 (MPLAB IPE 6.20 or
    older), check display/buttons/serial, compare the two tuning searches
    on the real antennas (cell 0x36).
-2. ESP32 bridge firmware, once the parts arrive (below).
+2. ESP32 bridge firmware (Arduino core: USB CDC, UART to the tuner at
+   4800, TCP 7000, UDP 7001, Preferences, mDNS, hotspot + setup page),
+   following test/esp32_sim.py; mind the native USB reset on port open.
+3. Not done yet: a screenshot of the new screens for the README.
 
 ### Trying atutop without the tuner
 

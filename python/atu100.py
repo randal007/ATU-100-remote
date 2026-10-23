@@ -227,6 +227,8 @@ class atu100(object):
                         result = json.loads( self.json_buffer)
                     except:
                         logging.warning(f'Invalid JSON reveived: [{self.json_buffer}]')
+                    if isinstance(result, dict) and 'ESP32' in result:
+                        result = None  # the ESP32 bridge's own messages, not the tuner's
 
                     if result:
 

@@ -508,12 +508,13 @@ static void scenario(void)
         check(got("\"Build\":"), "board information");
         host_show_display("after boot");
         next();
-        send("{\"Status\": true}\n");
+        send("{\"ESP32\": \"Info\"}\n{\"Status\": true}\n"); // atutop's ESP32 probe, then status
         break;
 
     case 1:
         if (got("\"SWR\":")) {
             check(got("\"Auto\":false"), "status message answers {\"Status\": true}");
+            check(!got("\"Event\":\"Error\""), "an ESP32 bridge probe is ignored without an Error");
             next();
             send("{\"Tune\": true}\n"); // no carrier yet
         } else

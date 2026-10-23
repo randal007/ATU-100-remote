@@ -327,10 +327,23 @@ Detector; the scroll wheel on HighSWR changes the limit. Keys: `t` tune,
 second, `g` tuning search, `[` `]` HighSWR limit, `q` quit.
 
 ```
-atutop                          # $ATU100_PORT, else /dev/ttyACM0
+atutop                          # the connect screen ($ATU100_PORT skips it)
 atutop /dev/ttyUSB0
 atutop socket://atu100.local:7000
 ```
+
+**Connect screen** (at start without a port, or `c`): USB serial ports
+named from their USB IDs (ESP32, Arduino, CH340...), ESP32 bridges found
+on the network (UDP broadcast to port 7001, and `atu100.local`), the ports
+used before (`~/.config/atutop/recent`), an address to type, and
+**simulator**: starts the simulated tuner and ESP32 bridge from
+`test/` so everything can be tried without hardware.
+
+**Settings** (`o`): the link, and with an ESP32 bridge its Wi-Fi: scan,
+pick a network, password, IP address from the router or fixed
+(address, gateway, mask), connect, forget, and **use Wi-Fi** to move
+from USB to Wi-Fi without restarting. Wi-Fi settings change over USB only.
+atutop reconnects by itself when the link drops.
 
 It works from 80×24 up and takes the port for itself, so it and the Python
 tools cannot talk to the tuner at the same time. Commands go out one at a
@@ -473,7 +486,8 @@ on Serial1:
 - has functions for tune, reset, bypass, status, detector readings and
   setting relays.
 
-An ESP32 bridge (USB and Wi-Fi, web page) is planned; see
+An ESP32 bridge (USB and Wi-Fi) is being written; its messages are
+specified by the simulator, `test/esp32_sim.py`, and in
 [docs/NOTES.md](docs/NOTES.md).
 
 ## Building
@@ -483,7 +497,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15082 of 16384 program words (92%) and 662 of 1024
+The firmware uses 15115 of 16384 program words (92%) and 662 of 1024
 bytes of RAM.
 
 ## Testing without a tuner

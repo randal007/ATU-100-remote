@@ -4,12 +4,15 @@
 //!     atutop [PORT]     PORT: /dev/ttyACM0, COM3, socket://host:port
 //!                       default $ATU100_PORT, else /dev/ttyACM0
 
+mod connect;
+mod esp;
 mod link;
 mod tuner;
 mod ui;
 
+use esp::{Esp, PROBE};
 use link::{Incoming, Link};
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::crossterm::execute;
 use std::collections::VecDeque;
 use std::io::stdout;
@@ -22,6 +25,54 @@ pub struct App {
     pub link_error: Option<String>,
     pub detector: bool, // ask for detector voltages once a second
     pub started: Instant,
+    pub esp: Esp,
+    pub settings: Option<Settings>, // the settings box, while it is open
+    pub connect: Option<connect::Connect>, // the connect screen, while it is open
+    sim: Option<connect::Simulator>,       // started from the connect screen
+    switch_to: Option<String>,      // a port to move to
+}
+
+/// The settings box: the Wi-Fi settings being typed
+pub struct Settings {
+    pub field: Field,
+    pub ssid: String,
+    pub pass: String,
+    pub show_pass: bool,
+    pub selected: Option<usize>, // in the scanned networks
+    pub fixed: bool,             // a fixed IP address rather than the router's choice
+    pub ip: String,
+    pub gateway: String,
+    pub mask: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Field {
+    Network,
+    Password,
+    Ip,
+    Gateway,
+    Mask,
+}
+
+impl Settings {
+    /// The fields showing, in Tab order
+    pub fn fields(&self) -> &'static [Field] {
+        if self.fixed {
+            &[Field::Network, Field::Password, Field::Ip, Field::Gateway, Field::Mask]
+        } else {
+            &[Field::Network, Field::Password]
+        }
+    }
+
+    pub fn text(&mut self, f: Field) -> &mut String {
+        match f {
+            Field::Network => &mut self.ssid,
+            Field::Password => &mut self.pass,
+            Field::Ip => &mut self.ip,
+            Field::Gateway => &mut self.gateway,
+            Field::Mask => &mut self.mask,
+        }
+    }
 }
 
 /// Commands wait here and go out one at a time: the tuner reads its serial
@@ -33,11 +84,11 @@ struct Outbox {
 }
 
 /// What a newer command replaces: {"Set": 55, ...} by cell, others by name.
-/// Tune and Reset always go.
+/// Tune, Reset and the ESP32 bridge's commands always go.
 fn replaces(msg: &str) -> Option<&str> {
     let end = if msg.starts_with(r#"{"Set""#) { msg.find(',')? } else { msg.find(':')? };
     let key = &msg[..end];
-    (!key.contains("Tune") && !key.contains("Reset")).then_some(key)
+    (!key.contains("Tune") && !key.contains("Reset") && !key.contains("ESP32")).then_some(key)
 }
 
 impl Outbox {
@@ -87,13 +138,21 @@ impl Outbox {
         self.recent.clear();
     }
 
+    /// A new link: nothing sent on it yet
+    fn clear(&mut self) {
+        self.queue.clear();
+        self.recent.clear();
+        self.sent_at = None;
+    }
+
     fn idle(&self) -> bool {
         self.queue.is_empty() && self.sent_at.is_none()
     }
 
     /// Send the next command once the last was answered, or after a second.
     /// While tuning only Reset (to stop it), Status and Raw go: the tuner
-    /// answers those while it waits for carrier.
+    /// answers those while it waits for carrier. The ESP32 bridge answers
+    /// its own at any time.
     fn pump(&mut self, link: &mut Link, tuning: bool) {
         if self.sent_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
             return;
@@ -102,7 +161,7 @@ impl Outbox {
         let next_ok = self
             .queue
             .front()
-            .is_some_and(|m| !tuning || ["Reset", "Status", "Raw"].iter().any(|k| m.contains(k)));
+            .is_some_and(|m| !tuning || ["Reset", "Status", "Raw", "ESP32"].iter().any(|k| m.contains(k)));
         if next_ok {
             let msg = self.queue.pop_front().unwrap();
             link.send(&msg);
@@ -119,9 +178,13 @@ usage: atutop [PORT]
 PORT is a serial port (/dev/ttyACM0, COM3) or socket://host:port for a
 network bridge; default $ATU100_PORT, else /dev/ttyACM0. 4800 baud.
 
+Without a PORT it opens the connect screen: USB ports, ESP32 bridges found
+on the network, and the ports used before (kept in ~/.config/atutop/recent).
+
 keys: t tune, b bypass, a auto, r reset, s status, v detector voltages,
-g tuning search, [ ] HighSWR limit, q or Esc quit. The mouse clicks the
-buttons, the relays and the tuner settings; the wheel on HighSWR changes it.";
+g tuning search, [ ] HighSWR limit, o settings (ESP32 Wi-Fi), c connect
+to another port, q or Esc quit. The mouse clicks the buttons, the relays and the tuner settings; the
+wheel on HighSWR changes it.";
 
 fn main() {
     let arg = std::env::args().nth(1);
@@ -129,19 +192,31 @@ fn main() {
         println!("{HELP}");
         return;
     }
-    let port = arg.or_else(|| std::env::var("ATU100_PORT").ok()).unwrap_or_else(|| "/dev/ttyACM0".into());
-    let mut link = match Link::open(&port) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("atutop: cannot open {e}");
-            std::process::exit(1);
-        }
-    };
-    let mut app = App { port, link_error: None, detector: false, started: Instant::now() };
+    let port = arg.or_else(|| std::env::var("ATU100_PORT").ok());
+    let mut app = App { port: String::new(), link_error: None, detector: false, started: Instant::now(), esp: Esp::default(), settings: None, connect: None, sim: None, switch_to: None };
+    let mut link = None;
+    match port {
+        Some(port) => match Link::open(&port) {
+            Ok(l) => {
+                link = Some(l);
+                connect::remember(&port);
+                app.port = port;
+            }
+            Err(e) => {
+                eprintln!("atutop: cannot open {e}");
+                std::process::exit(1);
+            }
+        },
+        None => app.connect = Some(connect::Connect::new("")),
+    }
     let mut t = Tuner::new();
-    t.log("Connected, asking for the status and settings", Kind::Info);
     let mut out = Outbox { queue: VecDeque::new(), sent_at: None, recent: VecDeque::new() };
-    out.push(r#"{"Status": true}"#.into());
+    if link.is_some() {
+        t.log("Connected, asking for the status and settings", Kind::Info);
+        out.push(PROBE.into()); // is there an ESP32 bridge?
+        app.esp.probing();
+        out.push(r#"{"Status": true}"#.into());
+    }
     out.push(r#"{"Dump": "EEPROM"}"#.into());
 
     let mut terminal = ratatui::init();
@@ -154,15 +229,23 @@ fn main() {
     }
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbox, t: &mut Tuner, app: &mut App) -> std::io::Result<()> {
+fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &mut Outbox, t: &mut Tuner, app: &mut App) -> std::io::Result<()> {
     let mut last_sample = Instant::now();
     let mut last_poll = Instant::now();
     let mut last_raw = Instant::now();
+    let mut last_info = Instant::now();
+    let mut last_retry = Instant::now();
     let mut hits = ui::Hits::default();
     loop {
-        while let Ok(msg) = link.rx.try_recv() {
+        while let Some(msg) = link.as_ref().and_then(|l| l.rx.try_recv().ok()) {
             match msg {
                 Incoming::Line(line) => {
+                    if let Ok(serde_json::Value::Object(m)) = serde_json::from_str(&line) {
+                        if app.esp.line(&m) {
+                            out.answered();
+                            continue; // the bridge's own message
+                        }
+                    }
                     t.line(&line);
                     if line.contains(r#""Event":"Error""#) || line.contains(r#""Event":"Busy""#) {
                         out.refused();
@@ -173,8 +256,83 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
                 Incoming::Closed(why) => {
                     t.log(format!("Link lost: {why}"), Kind::Bad);
                     app.link_error = Some(why);
+                    last_retry = Instant::now();
                 }
             }
+        }
+        // Moving to another port (USB to Wi-Fi), or trying again after the
+        // link was lost
+        let reopen = app.switch_to.take().or_else(|| {
+            (app.link_error.is_some() && last_retry.elapsed() >= Duration::from_secs(2)).then(|| app.port.clone())
+        });
+        // The simulator: start it, then connect to its ESP32 bridge
+        let reopen = match reopen.as_deref() {
+            Some(connect::SIM) => {
+                app.sim = None; // a fresh one
+                match connect::Simulator::start() {
+                    Ok(sim) => {
+                        let port = sim.port.clone();
+                        app.sim = Some(sim);
+                        t.log("Simulator started: a pretend tuner and ESP32 bridge", Kind::Info);
+                        Some(port)
+                    }
+                    Err(e) => {
+                        if let Some(c) = app.connect.as_mut() {
+                            c.error = Some(e);
+                        }
+                        None
+                    }
+                }
+            }
+            _ => reopen,
+        };
+        if let Some(port) = reopen {
+            last_retry = Instant::now();
+            let moving = link.is_none() || port != app.port;
+            if moving {
+                *link = None; // let go of the old port first: it may be the same device
+            }
+            match Link::open(&port) {
+                Ok(new) => {
+                    *link = Some(new);
+                    t.log(if moving { format!("Connected to {port}") } else { "Link back".into() }, Kind::Good);
+                    if moving {
+                        connect::remember(&port);
+                        app.connect = None;
+                        *t = Tuner { events: std::mem::take(&mut t.events), ..Tuner::new() };
+                        out.clear();
+                        out.push(r#"{"Dump": "EEPROM"}"#.into());
+                    }
+                    app.port = port;
+                    app.link_error = None;
+                    app.esp.forget_link();
+                    out.queue.retain(|m| m.contains("Dump"));
+                    out.queue.push_front(r#"{"Status": true}"#.into());
+                    out.queue.push_front(PROBE.into());
+                    app.esp.probing();
+                }
+                Err(e) if moving => {
+                    t.log(format!("Cannot connect to {e}"), Kind::Bad);
+                    match app.connect.as_mut() {
+                        Some(c) => c.error = Some(e),
+                        None => app.esp.notice = Some((format!("cannot connect: {e}"), true)),
+                    }
+                    if !app.port.is_empty() && app.connect.is_none() {
+                        app.switch_to = None;
+                        app.link_error = Some("not connected".into()); // try the old port again
+                    }
+                }
+                Err(e) => app.link_error = Some(e),
+            }
+        }
+        if let Some(c) = app.connect.as_mut() {
+            c.poll();
+        }
+        app.esp.check_probe();
+        // While the settings are open, keep the bridge's Wi-Fi state fresh
+        if app.settings.is_some() && app.esp.present == Some(true) && last_info.elapsed() >= Duration::from_secs(2) && out.idle() {
+            last_info = Instant::now();
+            out.push(PROBE.into());
         }
         if last_sample.elapsed() >= Duration::from_millis(500) {
             last_sample = Instant::now();
@@ -190,7 +348,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
             last_raw = Instant::now();
             out.push(r#"{"Raw": true}"#.into());
         }
-        out.pump(link, t.tuning);
+        if let Some(l) = link.as_mut() {
+            out.pump(l, t.tuning);
+        }
 
         terminal.draw(|f| hits = ui::draw(f, t, app))?;
 
@@ -198,6 +358,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
             continue;
         }
         let action = match event::read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press && app.connect.is_some() => connect_key(k, app, link.is_some()),
+            Event::Key(k) if k.kind == KeyEventKind::Press && app.settings.is_some() => settings_key(k, app),
             Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                 KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
                 KeyCode::Char('t') => Some(Action::Tune),
@@ -209,11 +371,13 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
                 KeyCode::Char('g') => Some(Action::Search),
                 KeyCode::Char(']') | KeyCode::Char('+') => Some(Action::AlarmUp),
                 KeyCode::Char('[') | KeyCode::Char('-') => Some(Action::AlarmDown),
+                KeyCode::Char('o') | KeyCode::F(2) => Some(Action::Settings),
+                KeyCode::Char('c') => Some(Action::ChangeLink),
                 _ => None,
             },
             Event::Mouse(m) => match m.kind {
                 MouseEventKind::Down(MouseButton::Left) => hits.at(m.column, m.row),
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if app.settings.is_none() && app.connect.is_none() => {
                     let over_alarm = hits.alarm_row.is_some_and(|r| m.row == r.y && m.column >= r.x && m.column < r.x + r.width);
                     match (over_alarm, m.kind) {
                         (true, MouseEventKind::ScrollUp) => Some(Action::AlarmUp),
@@ -230,6 +394,96 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
             Some(a) => act(a, out, t, app),
             None => {}
         }
+    }
+}
+
+/// Keys while the settings box is open: most of them type into its fields
+fn settings_key(k: KeyEvent, app: &mut App) -> Option<Action> {
+    let s = app.settings.as_mut()?;
+    let typing = app.esp.present == Some(true) && app.esp.over_usb;
+    match k.code {
+        KeyCode::Esc | KeyCode::F(2) => Some(Action::CloseSettings),
+        KeyCode::Char('o' | 'q') if !typing => Some(Action::CloseSettings),
+        KeyCode::F(5) => Some(Action::Scan),
+        _ if !typing => None,
+        KeyCode::Tab | KeyCode::BackTab => {
+            let fields = s.fields();
+            let i = fields.iter().position(|f| *f == s.field).unwrap_or(0);
+            let n = fields.len();
+            s.field = fields[if k.code == KeyCode::Tab { (i + 1) % n } else { (i + n - 1) % n }];
+            None
+        }
+        KeyCode::Up | KeyCode::Down => {
+            let n = app.esp.networks.len();
+            if n == 0 {
+                return None;
+            }
+            let i = match (s.selected, k.code) {
+                (None, _) => 0,
+                (Some(i), KeyCode::Up) => i.saturating_sub(1),
+                (Some(i), _) => (i + 1).min(n - 1),
+            };
+            Some(Action::PickNet(i as u8))
+        }
+        KeyCode::Enter => Some(Action::Connect),
+        KeyCode::Backspace => {
+            s.text(s.field).pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            let field = s.field;
+            let max = match field {
+                Field::Network => 32,
+                Field::Password => 63,
+                _ if !(c.is_ascii_digit() || c == '.') => return None,
+                _ => 15,
+            };
+            let text = s.text(field);
+            if text.chars().count() < max {
+                text.push(c);
+            }
+            if s.field == Field::Network {
+                s.selected = None;
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Keys on the connect screen: arrows choose, typing goes to the address
+fn connect_key(k: KeyEvent, app: &mut App, linked: bool) -> Option<Action> {
+    let c = app.connect.as_mut()?;
+    match k.code {
+        KeyCode::Esc if linked => Some(Action::CloseConnect),
+        KeyCode::Esc => Some(Action::Quit),
+        KeyCode::F(5) => Some(Action::ConnectRefresh),
+        KeyCode::Enter => Some(Action::ConnectGo),
+        KeyCode::Tab | KeyCode::BackTab => {
+            c.typing = !c.typing;
+            None
+        }
+        KeyCode::Up | KeyCode::Down => {
+            c.typing = false;
+            let n = c.entries.len();
+            if n > 0 {
+                c.selected = if k.code == KeyCode::Up { c.selected.saturating_sub(1) } else { (c.selected + 1).min(n - 1) };
+            }
+            None
+        }
+        KeyCode::Backspace => {
+            c.address.pop();
+            c.typing = true;
+            None
+        }
+        KeyCode::Char(ch) => {
+            c.typing = true;
+            if c.address.len() < 80 {
+                c.address.push(ch);
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -290,6 +544,142 @@ fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
             let value = if next == 0.0 { 0 } else { alarm_bcd(next) };
             t.eeprom[CELL_SWR_ALARM] = Some(value);
             out.push(format!(r#"{{"Set": {CELL_SWR_ALARM}, "Value": {value}}}"#));
+        }
+        Action::Settings if app.settings.is_some() => app.settings = None,
+        Action::Settings => {
+            let esp = &mut app.esp;
+            app.settings = Some(Settings {
+                field: Field::Network,
+                ssid: esp.ssid.clone(),
+                pass: String::new(),
+                show_pass: false,
+                selected: None,
+                fixed: !esp.static_ip.is_empty(),
+                ip: esp.static_ip.clone(),
+                gateway: esp.gateway.clone(),
+                mask: if esp.mask.is_empty() { "255.255.255.0".into() } else { esp.mask.clone() },
+            });
+            esp.notice = None;
+            if esp.present != Some(true) {
+                esp.present = None; // ask again: the bridge may have started since
+                esp.probing();
+            }
+            out.push(PROBE.into());
+            if esp.present == Some(true) && esp.over_usb && esp.networks.is_empty() {
+                esp.scanning = true;
+                out.push(r#"{"ESP32": "Scan"}"#.into());
+            }
+        }
+        Action::CloseSettings => app.settings = None,
+        Action::Scan => {
+            if app.esp.present == Some(true) && !app.esp.scanning {
+                app.esp.scanning = true;
+                out.push(r#"{"ESP32": "Scan"}"#.into());
+            }
+        }
+        Action::PickNet(i) => {
+            if let (Some(s), Some(net)) = (app.settings.as_mut(), app.esp.networks.get(i as usize)) {
+                if s.ssid != net.ssid {
+                    s.pass.clear();
+                }
+                s.ssid = net.ssid.clone();
+                s.selected = Some(i as usize);
+                s.field = if net.secure { Field::Password } else { Field::Network };
+            }
+        }
+        Action::Focus(field) => {
+            if let Some(s) = app.settings.as_mut() {
+                s.field = field;
+            }
+        }
+        Action::AddrFixed(fixed) => {
+            if let Some(s) = app.settings.as_mut() {
+                s.fixed = fixed;
+                if fixed && s.ip.is_empty() {
+                    // start from the address the router gave it
+                    s.ip = app.esp.ip.clone();
+                    s.field = Field::Ip;
+                } else if !fixed && s.fields().iter().all(|f| *f != s.field) {
+                    s.field = Field::Network;
+                }
+            }
+        }
+        Action::ShowPass => {
+            if let Some(s) = app.settings.as_mut() {
+                s.show_pass = !s.show_pass;
+            }
+        }
+        Action::Connect => {
+            let Some(s) = app.settings.as_mut() else { return };
+            if s.ssid.is_empty() {
+                app.esp.notice = Some(("pick a network from the list, or type its name".into(), true));
+                return;
+            }
+            let mut msg = serde_json::json!({"ESP32": "WiFi", "SSID": s.ssid});
+            // an empty password for the same network keeps the saved one
+            if !s.pass.is_empty() || s.ssid != app.esp.ssid {
+                msg["Pass"] = s.pass.clone().into();
+            }
+            if s.fixed {
+                let ip: Option<std::net::Ipv4Addr> = s.ip.parse().ok();
+                let mask: Option<std::net::Ipv4Addr> = s.mask.parse().ok();
+                let (Some(ip), Some(mask)) = (ip, mask) else {
+                    app.esp.notice = Some(("the IP address or mask is not complete, e.g. 192.168.1.60 and 255.255.255.0".into(), true));
+                    return;
+                };
+                let gateway = if s.gateway.is_empty() {
+                    let o = ip.octets();
+                    format!("{}.{}.{}.1", o[0], o[1], o[2]) // the usual router address
+                } else {
+                    s.gateway.clone()
+                };
+                if gateway.parse::<std::net::Ipv4Addr>().is_err() {
+                    app.esp.notice = Some(("the gateway address is not complete".into(), true));
+                    return;
+                }
+                s.gateway = gateway.clone();
+                msg["IP"] = ip.to_string().into();
+                msg["Gateway"] = gateway.into();
+                msg["Mask"] = mask.to_string().into();
+            } else {
+                msg["IP"] = "".into(); // the router's choice
+            }
+            out.push(msg.to_string());
+            app.esp.notice = Some((format!("sending the settings for {}…", s.ssid), false));
+            s.pass.clear();
+        }
+        Action::Forget => out.push(r#"{"ESP32": "Forget"}"#.into()),
+        Action::UseWifi => match app.esp.wifi_port() {
+            Some(p) => app.switch_to = Some(p),
+            None => app.esp.notice = Some(("the bridge is not on Wi-Fi yet".into(), true)),
+        },
+        Action::ChangeLink => {
+            app.settings = None;
+            app.connect = Some(connect::Connect::new(&app.port));
+        }
+        Action::CloseConnect => app.connect = None,
+        Action::ConnectRefresh => {
+            if let Some(c) = app.connect.as_mut() {
+                c.refresh();
+            }
+        }
+        Action::ConnectPick(i) => {
+            if let Some(c) = app.connect.as_mut() {
+                c.selected = i as usize;
+                c.typing = false;
+                app.switch_to = c.chosen();
+            }
+        }
+        Action::ConnectType => {
+            if let Some(c) = app.connect.as_mut() {
+                c.typing = true;
+            }
+        }
+        Action::ConnectGo => {
+            if let Some(c) = app.connect.as_mut() {
+                c.error = None;
+                app.switch_to = c.chosen();
+            }
         }
         Action::Quit => {}
     }

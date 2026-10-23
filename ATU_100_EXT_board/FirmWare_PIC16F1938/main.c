@@ -654,7 +654,7 @@ void serial_proc(void)
       case JRR_STR:
          if (strcmp(json_rx_name, "Dump") == 0)
             dump_eeprom();
-         else
+         else if (strcmp(json_rx_name, "ESP32") != 0) // for an ESP32 bridge: none here
             send_error();
          break;
 
@@ -707,8 +707,11 @@ char serial_during_tune(void)
             busy = 1;
          break;
 
-      case JRR_INT:
       case JRR_STR:
+         if (strcmp(json_rx_name, "ESP32") == 0)
+            break; // for an ESP32 bridge: none here
+         // fall through
+      case JRR_INT:
          busy = 1;
          if (c != '}') // a number can end the message without a JRR_END
             break;

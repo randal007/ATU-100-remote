@@ -1,13 +1,14 @@
 //! Drawing, in the style of btop: rounded boxes, gradient meters and braille
 //! graphs, with btop's default theme colours.
 
+use crate::esp::bars;
 use crate::tuner::{Kind, Tuner};
-use crate::App;
+use crate::{App, Field};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 
 const MAIN_FG: Color = Color::Rgb(0xcc, 0xcc, 0xcc);
@@ -26,6 +27,8 @@ const GREEN: Color = Color::Rgb(0x50, 0xf0, 0x95);
 const YELLOW: Color = Color::Rgb(0xf2, 0xe2, 0x66);
 const RED: Color = Color::Rgb(0xfa, 0x1e, 0x1e);
 const ON_BG: Color = Color::Rgb(0x2d, 0x6b, 0x3c);
+const BOX_SETTINGS: Color = Color::Rgb(0x2e, 0x7d, 0x8c);
+const FIELD_BG: Color = Color::Rgb(0x26, 0x26, 0x26);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
@@ -41,6 +44,22 @@ pub enum Action {
     Ind(u8),
     Cap(u8),
     Side,
+    Settings,
+    CloseSettings,
+    Scan,
+    PickNet(u8),
+    Focus(Field),
+    AddrFixed(bool),
+    ShowPass,
+    Connect,
+    Forget,
+    UseWifi,
+    ChangeLink,
+    CloseConnect,
+    ConnectRefresh,
+    ConnectPick(u8),
+    ConnectType,
+    ConnectGo,
     Quit,
 }
 
@@ -189,7 +208,33 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     let [relays, events] = Layout::vertical([Constraint::Length(6), Constraint::Min(3)]).areas(right);
     draw_relays(f, relays, t, &mut hits);
     draw_events(f, events, t);
-    draw_keys(f, keys, t, app, &mut hits);
+    if app.connect.is_some() {
+        hits = Hits::default(); // the box takes all the clicks while it is open
+        draw_connect(f, body, app, &mut hits);
+        let keys_list = [
+            ("Esc", if app.port.is_empty() { "quit" } else { "close" }, Action::CloseConnect, false),
+            ("↑↓", "choose", Action::ConnectRefresh, false),
+            ("Enter", "connect", Action::ConnectGo, false),
+            ("Tab", "address", Action::ConnectType, false),
+            ("F5", "search again", Action::ConnectRefresh, false),
+        ];
+        draw_key_list(f, keys, &keys_list, &mut hits);
+        hits.areas.retain(|(r, a)| r.y != keys.y || *a != Action::ConnectRefresh || r.x > keys.x + 20); // ↑↓ is not a button
+    } else if app.settings.is_some() {
+        hits = Hits::default(); // the box takes all the clicks while it is open
+        draw_settings(f, body, app, &mut hits);
+        let typing = app.esp.present == Some(true) && app.esp.over_usb;
+        let keys_list = [
+            ("Esc", "close", Action::CloseSettings, false),
+            ("Tab", "field", Action::Focus(Field::Network), false),
+            ("↑↓", "network", Action::PickNet(0), false),
+            ("Enter", "connect", Action::Connect, false),
+            ("F5", "scan", Action::Scan, false),
+        ];
+        draw_key_list(f, keys, &keys_list[..if typing { 5 } else { 1 }], &mut hits);
+    } else {
+        draw_keys(f, keys, t, app, &mut hits);
+    }
     hits
 }
 
@@ -426,7 +471,7 @@ fn draw_events(f: &mut Frame, area: Rect, t: &Tuner) {
 }
 
 fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
-    let keys: [(&str, &str, Action, bool); 8] = [
+    let mut keys = vec![
         ("t", "tune", Action::Tune, t.tuning),
         ("b", "bypass", Action::Bypass, t.bypass),
         ("a", "auto", Action::Auto, t.auto),
@@ -434,14 +479,27 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         ("s", "status", Action::Status, false),
         ("v", "detector", Action::Detector, app.detector),
         ("g", "search", Action::Search, false),
+        ("o", "settings", Action::Settings, false),
         ("q", "quit", Action::Quit, false),
     ];
+    // On a narrow terminal leave out the buttons least needed (their keys
+    // still work) so settings and quit always show
+    let width = |k: &[(&str, &str, Action, bool)]| k.iter().map(|(k, n, _, _)| k.chars().count() + n.len() + 3).sum::<usize>();
+    for drop in [Action::Status, Action::Search, Action::Detector] {
+        if width(&keys) > area.width as usize {
+            keys.retain(|k| k.2 != drop);
+        }
+    }
+    draw_key_list(f, area, &keys, hits);
+}
+
+fn draw_key_list(f: &mut Frame, area: Rect, keys: &[(&str, &str, Action, bool)], hits: &mut Hits) {
     // a gap between buttons when there is room for it
-    let total: usize = keys.iter().map(|(k, n, _, _)| k.len() + n.len() + 3).sum();
+    let total: usize = keys.iter().map(|(k, n, _, _)| k.chars().count() + n.len() + 3).sum();
     let gap = if total + keys.len() + 1 <= area.width as usize { 1 } else { 0 };
     let mut x = area.x + gap;
-    for (key, name, action, active) in keys {
-        let width = (key.len() + name.len() + 3) as u16;
+    for &(key, name, action, active) in keys {
+        let width = (key.chars().count() + name.len() + 3) as u16;
         if x + width > area.x + area.width {
             break;
         }
@@ -449,8 +507,322 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         let buf = f.buffer_mut();
         buf.set_string(x, area.y, " ", Style::new().bg(bg));
         buf.set_string(x + 1, area.y, key, Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));
-        buf.set_string(x + 1 + key.len() as u16, area.y, format!(" {name} "), Style::new().fg(MAIN_FG).bg(bg));
+        buf.set_string(x + 1 + key.chars().count() as u16, area.y, format!(" {name} "), Style::new().fg(MAIN_FG).bg(bg));
         hits.areas.push((Rect { x, y: area.y, width, height: 1 }, action));
         x += width + gap;
+    }
+}
+
+/// A clickable button in the settings box; returns its width
+fn button(buf: &mut Buffer, x: u16, y: u16, text: &str, action: Action, on: bool, hits: &mut Hits) -> u16 {
+    let text = format!(" {text} ");
+    let w = text.chars().count() as u16;
+    let style = if on { Style::new().fg(TITLE).bg(ON_BG).add_modifier(Modifier::BOLD) } else { Style::new().fg(INACTIVE).bg(DIV) };
+    buf.set_string(x, y, &text, style);
+    if on {
+        hits.areas.push((Rect { x, y, width: w, height: 1 }, action));
+    }
+    w
+}
+
+/// The settings box, over the middle of the screen: the link, and the ESP32
+/// bridge's Wi-Fi when there is one
+fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
+    let Some(set) = &app.settings else { return };
+    let esp = &app.esp;
+    let usb = esp.present == Some(true) && esp.over_usb;
+    let nets = if usb { esp.networks.len().min(6) as u16 } else { 0 };
+    let want_h = match esp.present {
+        Some(true) if usb => 17 + nets.max(1) + if set.fixed { 3 } else { 0 },
+        Some(true) => 13,
+        _ => 10,
+    };
+    let w = body.width.saturating_sub(4).min(74);
+    let h = body.height.min(want_h);
+    let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
+    f.render_widget(Clear, area);
+    let block = boxed("⁶", "settings", BOX_SETTINGS).title(corner("Esc to close".into(), BOX_SETTINGS));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let buf = f.buffer_mut();
+    let bottom = inner.y + inner.height;
+    let mut y = inner.y;
+    let lw = 12usize;
+    let put = |buf: &mut Buffer, y: u16, spans: Vec<Span>| {
+        if y < bottom {
+            buf.set_line(inner.x, y, &Line::from(spans), inner.width);
+        }
+    };
+    let value = |s: String| Span::styled(s, Style::new().fg(TITLE));
+    let dim = |s: String| Span::styled(s, Style::new().fg(GRAPH_TEXT));
+    let colored = |s: String, c: Color| Span::styled(s, Style::new().fg(c));
+    let rule = |buf: &mut Buffer, y: u16| {
+        if y < bottom {
+            buf.set_string(inner.x + 1, y, "─".repeat(inner.width.saturating_sub(2) as usize), Style::new().fg(DIV));
+        }
+    };
+
+    let how = match (esp.present, esp.over_usb, app.port.starts_with("socket://")) {
+        (Some(true), true, _) => "USB to the ESP32 bridge",
+        (Some(true), false, _) => "Wi-Fi to the ESP32 bridge",
+        (None, _, _) => "looking for an ESP32 bridge…",
+        (Some(false), _, true) => "network, no ESP32 bridge",
+        (Some(false), _, false) => "straight to the tuner, or through the Mega",
+    };
+    put(buf, y, vec![label("Link", lw), value(app.port.clone()), dim(format!("  {how}"))]);
+    let bw = " change ".chars().count() as u16;
+    button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "change", Action::ChangeLink, true, hits);
+    y += 1;
+    if esp.present == Some(true) {
+        put(buf, y, vec![label("ESP32", lw), value(format!("bridge {}", esp.version))]);
+        y += 1;
+    }
+    rule(buf, y);
+    y += 1;
+
+    match esp.present {
+        None => {
+            put(buf, y, vec![dim(" Asking the link for an ESP32 bridge…".into())]);
+            return;
+        }
+        Some(false) => {
+            for text in [
+                " No ESP32 bridge answered on this link.",
+                "",
+                " The Wi-Fi settings are for the ESP32 bridge. With the tuner",
+                " connected straight to the computer, or through the Mega,",
+                " there is nothing to set here; everything else works as usual.",
+            ] {
+                put(buf, y, vec![dim(text.into())]);
+                y += 1;
+            }
+            return;
+        }
+        Some(true) => {}
+    }
+
+    // Wi-Fi state
+    let state = match esp.wifi.as_str() {
+        "Connected" => vec![colored("● ".into(), GREEN), value("connected  ".into()), value(esp.ssid.clone()), dim(format!("  {} {} dBm", bars(esp.rssi), esp.rssi))],
+        "Connecting" => vec![colored("● ".into(), YELLOW), value(format!("joining {}…", esp.ssid))],
+        "Failed" => vec![colored("● ".into(), RED), colored(format!("cannot join {}", esp.ssid), RED), dim("  trying again".into())],
+        _ => vec![colored("○ ".into(), INACTIVE), value("not set up".into())],
+    };
+    let mut line = vec![label("Wi-Fi", lw)];
+    line.extend(state);
+    put(buf, y, line);
+    y += 1;
+    if let Some(port) = esp.wifi_port() {
+        let addr = port.trim_start_matches("socket://").to_string();
+        let how = if esp.static_ip.is_empty() { "from the router" } else { "fixed" };
+        let host = if esp.host.is_empty() { format!("  {how}") } else { format!("  {how} · {}", esp.host) };
+        put(buf, y, vec![label("Address", lw), value(addr), dim(host)]);
+        if usb && y < bottom {
+            let bw = " use Wi-Fi ".chars().count() as u16;
+            button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "use Wi-Fi", Action::UseWifi, true, hits);
+        }
+        y += 1;
+    }
+    let mut line = vec![label("Hotspot", lw)];
+    if esp.hotspot {
+        line.extend([colored("● ".into(), GREEN), value(format!("on  {}", esp.hotspot_name)), dim("  setup page at 192.168.4.1".into())]);
+    } else {
+        line.extend([colored("○ ".into(), INACTIVE), value("off".into()), dim("  on when the bridge cannot join a network".into())]);
+    }
+    put(buf, y, line);
+    y += 1;
+    rule(buf, y);
+    y += 1;
+
+    if !usb {
+        put(buf, y, vec![dim(" Wi-Fi settings change over USB only: connect with the USB cable".into())]);
+        put(buf, y + 1, vec![dim(" to choose another network.".into())]);
+        return;
+    }
+
+    // Networks
+    put(buf, y, vec![label("Networks", lw)]);
+    if y < bottom {
+        let x = inner.x + 1 + lw as u16;
+        let bw = button(buf, x, y, "scan", Action::Scan, !esp.scanning, hits);
+        let note = if esp.scanning {
+            "  scanning…".to_string()
+        } else if esp.networks.is_empty() {
+            "  none found yet".to_string()
+        } else {
+            format!("  {} found", esp.networks.len())
+        };
+        buf.set_string(x + bw, y, note, Style::new().fg(GRAPH_TEXT));
+    }
+    y += 1;
+    for (i, net) in esp.networks.iter().take(nets as usize).enumerate() {
+        if y >= bottom {
+            break;
+        }
+        let picked = set.selected == Some(i) || (set.selected.is_none() && set.ssid == net.ssid);
+        let mark = if picked { "▸ " } else { "  " };
+        let name: String = net.ssid.chars().take(28).collect();
+        let style = if picked { Style::new().fg(TITLE).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG) };
+        let row = Line::from(vec![
+            Span::raw(" ".repeat(lw + 1)),
+            Span::styled(mark, Style::new().fg(HI)),
+            Span::styled(format!("{name:<29}"), style),
+            Span::styled(format!("{} {:>4} dBm", bars(net.rssi), net.rssi), Style::new().fg(gradient(((-net.rssi - 45) as f64 / 45.0).clamp(0.0, 1.0)))),
+            Span::styled(if net.secure { "  secured" } else { "  open" }, Style::new().fg(GRAPH_TEXT)),
+        ]);
+        buf.set_line(inner.x, y, &row, inner.width);
+        hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::PickNet(i as u8)));
+        y += 1;
+    }
+    if esp.networks.is_empty() {
+        y += 1;
+    }
+    y += 1;
+
+    // The fields: network, password, and the address
+    let field_w = 32u16;
+    let x0 = inner.x + 1 + lw as u16;
+    let field_row = |buf: &mut Buffer, y: u16, name: &str, text: String, field: Field, hits: &mut Hits| {
+        if y >= bottom {
+            return;
+        }
+        let focused = set.field == field;
+        buf.set_line(inner.x, y, &Line::from(label(name, lw)), inner.width);
+        let shown: String = text.chars().rev().take(field_w as usize - 1).collect::<Vec<_>>().into_iter().rev().collect();
+        let bg = if focused { DIV } else { FIELD_BG };
+        buf.set_string(x0, y, format!(" {shown:<w$}", w = field_w as usize - 1), Style::new().fg(TITLE).bg(bg));
+        if focused {
+            let cx = x0 + 1 + shown.chars().count() as u16;
+            buf.set_string(cx, y, "▏", Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));
+        }
+        hits.areas.push((Rect { x: x0, y, width: field_w, height: 1 }, Action::Focus(field)));
+    };
+    field_row(buf, y, "Network", set.ssid.clone(), Field::Network, hits);
+    y += 1;
+    let masked = if set.show_pass { set.pass.clone() } else { "•".repeat(set.pass.chars().count()) };
+    field_row(buf, y, "Password", masked, Field::Password, hits);
+    if y < bottom {
+        let bw = button(buf, x0 + field_w + 2, y, if set.show_pass { "hide" } else { "show" }, Action::ShowPass, true, hits);
+        if set.pass.is_empty() && set.ssid == esp.ssid && !esp.ssid.is_empty() {
+            buf.set_string(x0 + field_w + 3 + bw, y, "empty keeps the saved one", Style::new().fg(INACTIVE));
+        }
+    }
+    y += 1;
+    if y < bottom {
+        buf.set_line(inner.x, y, &Line::from(label("IP address", lw)), inner.width);
+        let pick = |buf: &mut Buffer, x: u16, text: &str, on: bool, action: Action, hits: &mut Hits| -> u16 {
+            let text = format!(" {} {text} ", if on { "●" } else { "○" });
+            let w = text.chars().count() as u16;
+            let style = if on { Style::new().fg(TITLE).bg(ON_BG).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG).bg(DIV) };
+            buf.set_string(x, y, &text, style);
+            hits.areas.push((Rect { x, y, width: w, height: 1 }, action));
+            w
+        };
+        let w1 = pick(buf, x0, "from the router", !set.fixed, Action::AddrFixed(false), hits);
+        pick(buf, x0 + w1 + 1, "fixed", set.fixed, Action::AddrFixed(true), hits);
+    }
+    y += 1;
+    if set.fixed {
+        field_row(buf, y, "  Address", set.ip.clone(), Field::Ip, hits);
+        y += 1;
+        let gw = if set.gateway.is_empty() && set.field != Field::Gateway { String::new() } else { set.gateway.clone() };
+        field_row(buf, y, "  Gateway", gw, Field::Gateway, hits);
+        if set.gateway.is_empty() && y < bottom {
+            buf.set_string(x0 + field_w + 2, y, "empty: x.x.x.1", Style::new().fg(INACTIVE));
+        }
+        y += 1;
+        field_row(buf, y, "  Mask", set.mask.clone(), Field::Mask, hits);
+        y += 1;
+    }
+    y += 1;
+    if y < bottom {
+        let x = inner.x + 1 + lw as u16;
+        let cw = button(buf, x, y, "connect", Action::Connect, !set.ssid.is_empty(), hits);
+        button(buf, x + cw + 2, y, "forget network", Action::Forget, !esp.ssid.is_empty() || esp.wifi != "Off", hits);
+    }
+    y += 1;
+    if let Some((text, error)) = &esp.notice {
+        put(buf, y, vec![Span::raw(" ".repeat(lw + 1)), colored(text.clone(), if *error { RED } else { GREEN })]);
+    }
+}
+
+/// The connect screen: what is plugged in, what is on the network, what
+/// was used before, an address to type, and the simulator
+fn draw_connect(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
+    use crate::connect::Kind as K;
+    let Some(c) = &app.connect else { return };
+    let groups: [(K, &str); 4] = [(K::Usb, "USB"), (K::Network, "Network"), (K::Recent, "Used before"), (K::Sim, "Try it")];
+    let shown = groups.iter().filter(|(k, _)| c.entries.iter().any(|e| e.kind == *k) || *k == K::Network).count() as u16;
+    let no_net = !c.entries.iter().any(|e| e.kind == K::Network) as u16;
+    let want_h = c.entries.len() as u16 + shown * 2 + no_net + 4 + c.error.is_some() as u16;
+    let w = body.width.saturating_sub(4).min(78);
+    let h = body.height.min(want_h);
+    let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
+    f.render_widget(Clear, area);
+    let corner_text = if c.searching.is_some() { "searching the network…" } else { "F5 to search again" };
+    let block = boxed("⁰", "connect", BOX_SETTINGS).title(corner(corner_text.into(), BOX_SETTINGS));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let buf = f.buffer_mut();
+    let bottom = inner.y + inner.height;
+    let mut y = inner.y;
+    for (kind, title) in groups {
+        let rows: Vec<(usize, &crate::connect::Entry)> = c.entries.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
+        if rows.is_empty() && kind != K::Network {
+            continue;
+        }
+        if y >= bottom {
+            break;
+        }
+        buf.set_string(inner.x + 1, y, title, Style::new().fg(TITLE).add_modifier(Modifier::BOLD));
+        y += 1;
+        if rows.is_empty() && y < bottom {
+            let note = if c.searching.is_some() { "   looking for ESP32 bridges…" } else { "   no ESP32 bridge answered (it needs Wi-Fi set up first, over USB)" };
+            buf.set_string(inner.x + 1, y, note, Style::new().fg(GRAPH_TEXT));
+            y += 1;
+        }
+        for (i, e) in rows {
+            if y >= bottom {
+                break;
+            }
+            let picked = i == c.selected && !c.typing;
+            let mark = if picked { "▸ " } else { "  " };
+            let style = if picked { Style::new().fg(TITLE).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG) };
+            let port = if e.kind == K::Sim { "simulator".to_string() } else { e.port.clone() };
+            let mut line = vec![
+                Span::raw("  "),
+                Span::styled(mark, Style::new().fg(HI)),
+                Span::styled(format!("{port:<24} "), style),
+            ];
+            if e.port == c.current {
+                line.push(Span::styled("● connected  ", Style::new().fg(GREEN)));
+            }
+            line.push(Span::styled(e.what.clone(), Style::new().fg(GRAPH_TEXT)));
+            let line = Line::from(line);
+            buf.set_line(inner.x, y, &line, inner.width);
+            hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::ConnectPick(i as u8)));
+            y += 1;
+        }
+        y += 1;
+    }
+    if y < bottom {
+        buf.set_string(inner.x + 1, y, "Address", Style::new().fg(TITLE).add_modifier(Modifier::BOLD));
+        let x = inner.x + 10;
+        let fw = 34u16;
+        let bg = if c.typing { DIV } else { FIELD_BG };
+        let text = if c.address.is_empty() && !c.typing { "IP of the bridge, or a port".to_string() } else { c.address.clone() };
+        let fg = if c.address.is_empty() && !c.typing { INACTIVE } else { TITLE };
+        buf.set_string(x, y, format!(" {text:<w$}", w = fw as usize - 1), Style::new().fg(fg).bg(bg));
+        if c.typing {
+            buf.set_string(x + 1 + c.address.chars().count() as u16, y, "▏", Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));
+        }
+        hits.areas.push((Rect { x, y, width: fw, height: 1 }, Action::ConnectType));
+        button(buf, x + fw + 2, y, "connect", Action::ConnectGo, true, hits);
+        y += 1;
+    }
+    if let Some(e) = &c.error {
+        if y < bottom {
+            buf.set_string(inner.x + 1, y, e, Style::new().fg(RED));
+        }
     }
 }

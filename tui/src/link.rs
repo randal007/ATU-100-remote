@@ -2,8 +2,10 @@
 //! socket://host:port. A thread reads lines and hands them over a channel.
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -15,13 +17,26 @@ pub enum Incoming {
 pub struct Link {
     writer: Box<dyn Write + Send>,
     pub rx: Receiver<Incoming>,
+    stop: Arc<AtomicBool>, // tells the reading thread to let go of the port
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Link {
     pub fn open(port: &str) -> Result<Link, String> {
         let (reader, writer): (Box<dyn Read + Send>, Box<dyn Write + Send>) =
             if let Some(addr) = port.strip_prefix("socket://") {
-                let stream = TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;
+                let sock = addr
+                    .to_socket_addrs()
+                    .map_err(|e| format!("{addr}: {e}"))?
+                    .next()
+                    .ok_or(format!("{addr}: no address"))?;
+                let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(3)).map_err(|e| format!("{addr}: {e}"))?;
+                stream.set_read_timeout(Some(Duration::from_millis(200))).map_err(|e| e.to_string())?;
                 let reader = stream.try_clone().map_err(|e| e.to_string())?;
                 (Box::new(reader), Box::new(stream))
             } else {
@@ -34,11 +49,13 @@ impl Link {
             };
 
         let (tx, rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
         thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 256];
             let mut line = Vec::new();
-            loop {
+            while !stopped.load(Ordering::Relaxed) {
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         let _ = tx.send(Incoming::Closed("connection closed".into()));
@@ -65,7 +82,7 @@ impl Link {
                 }
             }
         });
-        Ok(Link { writer, rx })
+        Ok(Link { writer, rx, stop })
     }
 
     /// One message to the tuner. The tuner handles them in order.
