@@ -161,6 +161,11 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    hotspot until the bridge joins a network. Tested with puppeteer
    (gods-eye-view's node_modules) driving chromium, desktop and phone
    (Pixel UA, 412x915): live data, settings, real input focused, Wi-Fi set.
+   Ratzilla bug (rev 2f6f7ef too): on a resize to a new size reset_grid()
+   makes a new grid <div>, and the key/mouse listeners stay on the old one,
+   so nothing answers after the window manager resizes the page (he hit
+   it). web.rs listens on the document instead and finds the clicked cell
+   from the <span> under the pointer. Could be reported upstream.
    Was the plan: split tui/
    into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
    shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui

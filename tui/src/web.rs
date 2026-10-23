@@ -9,7 +9,6 @@
 use crate::app::{Core, Effect, Field, Key, Mouse};
 use crate::tuner::Kind;
 use crate::ui::Action;
-use ratzilla::event::{KeyCode, MouseButton, MouseEventKind};
 use ratzilla::{DomBackend, WebRenderer};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -211,19 +210,38 @@ impl Overlay {
     }
 }
 
-fn map_key(k: &ratzilla::event::KeyEvent) -> Option<Key> {
-    Some(match k.code {
-        KeyCode::Char(c) => Key::Char(c),
-        KeyCode::Enter => Key::Enter,
-        KeyCode::Esc => Key::Esc,
-        KeyCode::Tab if k.shift => Key::BackTab,
-        KeyCode::Tab => Key::Tab,
-        KeyCode::Backspace => Key::Backspace,
-        KeyCode::Up => Key::Up,
-        KeyCode::Down => Key::Down,
-        KeyCode::F(n) => Key::F(n),
+fn map_key(e: &web_sys::KeyboardEvent) -> Option<Key> {
+    let key = e.key();
+    Some(match key.as_str() {
+        "Enter" => Key::Enter,
+        "Escape" => Key::Esc,
+        "Tab" if e.shift_key() => Key::BackTab,
+        "Tab" => Key::Tab,
+        "Backspace" => Key::Backspace,
+        "ArrowUp" => Key::Up,
+        "ArrowDown" => Key::Down,
+        k if k.len() > 1 && k.starts_with('F') => Key::F(k[1..].parse().ok()?),
+        k if k.chars().count() == 1 => Key::Char(k.chars().next()?),
         _ => return None,
     })
+}
+
+/// The screen cell under the pointer: the character's own <span>, in its
+/// row's <pre>, in Ratzilla's grid. Found from the page itself, so it holds
+/// whatever the grid's size (Ratzilla builds a new grid on a resize).
+fn cell_at(target: Option<web_sys::EventTarget>) -> Option<(u16, u16)> {
+    let el: web_sys::Element = target?.dyn_into().ok()?;
+    let span = el.closest("#grid > pre > span").ok()??;
+    let index = |mut e: web_sys::Element| {
+        let mut i = 0u16;
+        while let Some(prev) = e.previous_element_sibling() {
+            i += 1;
+            e = prev;
+        }
+        i
+    };
+    let row = span.parent_element()?;
+    Some((index(span), index(row)))
 }
 
 /// The few things the terminal does that make no sense here
@@ -251,34 +269,60 @@ pub fn main() {
     link.borrow_mut().connect();
 
     let backend = DomBackend::new().expect("the page");
-    let mut terminal = ratatui::Terminal::new(backend).expect("the screen");
+    let terminal = ratatui::Terminal::new(backend).expect("the screen");
     let overlay = Overlay::new(core.clone());
 
+    // Keys, clicks and the wheel from the whole page, not Ratzilla's own
+    // listeners: those sit on its grid, which it replaces when the window
+    // changes size, and then nothing answers
+    let document = web_sys::window().unwrap().document().unwrap();
     {
         let core = core.clone();
-        terminal
-            .on_key_event(move |k| {
-                if let Some(key) = map_key(&k) {
-                    let mut c = core.borrow_mut();
-                    let e = c.key(key);
-                    effect(e, &mut c);
-                }
-            })
-            .expect("keys");
+        let onkey = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+            if e.ctrl_key() || e.alt_key() || e.meta_key() {
+                return; // the browser's own shortcuts
+            }
+            let typing_in_box = e.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()).is_some();
+            if typing_in_box {
+                return; // the text box over a field handles its own keys
+            }
+            if let Some(key) = map_key(&e) {
+                e.prevent_default(); // no scrolling on Space, no reload on F5, Tab stays here
+                let mut c = core.borrow_mut();
+                let fx = c.key(key);
+                effect(fx, &mut c);
+            }
+        });
+        document.add_event_listener_with_callback("keydown", onkey.as_ref().unchecked_ref()).unwrap();
+        onkey.forget();
     }
     {
         let (core, overlay) = (core.clone(), overlay.clone());
-        terminal
-            .on_mouse_event(move |m| {
-                if let MouseEventKind::ButtonDown(MouseButton::Left) = m.kind {
-                    let mut c = core.borrow_mut();
-                    let e = c.mouse(Mouse::Click(m.col, m.row));
-                    effect(e, &mut c);
-                    // a tap on a field: the text box now, while the tap counts
-                    overlay.borrow_mut().update(&c, true);
-                }
-            })
-            .expect("mouse");
+        let onmouse = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
+            if e.button() != 0 {
+                return;
+            }
+            let Some((x, y)) = cell_at(e.target()) else { return };
+            let mut c = core.borrow_mut();
+            let fx = c.mouse(Mouse::Click(x, y));
+            effect(fx, &mut c);
+            // a tap on a field: the text box now, while the tap counts
+            overlay.borrow_mut().update(&c, true);
+        });
+        document.add_event_listener_with_callback("mousedown", onmouse.as_ref().unchecked_ref()).unwrap();
+        onmouse.forget();
+    }
+    {
+        let core = core.clone();
+        let onwheel = Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |e: web_sys::WheelEvent| {
+            let Some((x, y)) = cell_at(e.target()) else { return };
+            let m = if e.delta_y() < 0.0 { Mouse::WheelUp(x, y) } else { Mouse::WheelDown(x, y) };
+            let mut c = core.borrow_mut();
+            let fx = c.mouse(m);
+            effect(fx, &mut c);
+        });
+        document.add_event_listener_with_callback("wheel", onwheel.as_ref().unchecked_ref()).unwrap();
+        onwheel.forget();
     }
 
     terminal.draw_web(move |f| {
