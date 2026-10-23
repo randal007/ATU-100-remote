@@ -1,3 +1,4 @@
 log_*.txt
 host_test
 sweep*
+pty_name

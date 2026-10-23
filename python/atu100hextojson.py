@@ -6,8 +6,11 @@ This program takes an ATU-100. hex program file and extracts the EEPROM areas
 and saves as JSON file that can be later to apply the EEPROM settings to
 another ATU-100/
 
-The format of the JSON messages is documented in the file
-https://github.com/ukoda/ATU-100-remote/blob/master/README.md
+Use it on a backup read from the tuner with a programmer, then restore the
+settings over serial with:  atu100.py -c u -e eeprom.json
+
+The format of the JSON messages is documented in README.md at
+https://github.com/randal007/ATU-100-remote
 '''
 
 import json
@@ -34,10 +37,13 @@ try:
             eeprom.append(0xff)
 
         for line in hexfile:
+            line = line.strip()
+            if not line:
+                continue    # some tools end the file with blank lines
 
             # Check line starts ':' and is long enough
 
-            if line[:1] != ':' or len(line) < 12:
+            if line[:1] != ':' or len(line) < 11:
                 print(f'Invalid line {line}')
                 sys.exit(20)
 
@@ -68,6 +74,7 @@ try:
                             jsonfile.write(f'    "{celladdress:02x}": "{eeprom[celladdress]:02x}"\n')
                     jsonfile.write('}\n')
                 print(f'Created {sys.argv[2]}')
+                break       # end of file record
 
             elif rectype == 4:
                 base = int(line[9:13], 16) * 0x10000

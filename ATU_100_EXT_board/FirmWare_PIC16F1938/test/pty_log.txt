@@ -1,0 +1,26 @@
+ATU-100 host test: display type 5, Arduino baud error +0.0%
+serial port: /dev/pts/8
+     3.04  PC>  {"Status": true}
+     4.11  PC>  {"Bypass": true}
+     4.58  PC>  {"Bypass": false}
+     5.03  PC>  {"Tune": true}
+     7.23  PC>  {"Raw": true}
+     7.40  PC>  {"Set": 55, "Value": 37}
+     7.85  PC>  {"Get": 55}
+     8.29  PC>  {"Set": 54, "Value": 0}
+     8.72  PC>  {"Get": 54}
+     9.16  PC>  {"Get": 253}
+     9.53  PC>  {"Get": 255}
+     9.94  PC>  {"RelayC": 25}
+     9.94  PC>  {"Status": true}
+    10.67  PC>  {"Status": true}
+    11.08  PC>  {"Dump": "EEPROM"}
+    16.61  PC>  {"Dump": "EEPROM"}
+    22.01  PC>  {"Set": 0, "Value": 78}
+    22.17  PC>  {"Set": 1, "Value": 1}
+    22.32  PC>  {"Set": 54, "Value": 255}
+    22.47  PC>  {"Set": 55, "Value": 255}
+    22.91  PC>  {"Set": 251, "Value": 0}
+    23.36  PC>  {"Set": 253, "Value": 1}
+    23.80  PC>  {"Set": 255, "Value": 0}
+    24.27  PC>  {"Dump": "EEPROM"}

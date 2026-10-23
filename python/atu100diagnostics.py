@@ -4,13 +4,10 @@ ATU-100 diagnostic program
 
 This program is intended for diagnostics and setup of a remote ATU-100.
 
-The AUT-100 needs to be programmed with the hex file from
-https://github.com/ukoda/ATU-100-remote and the 3V TTL serial lines to wire to
-the board to allow comms with this program.
-
-This allows the excahnage of JSON format messages to control the ATU-100 and
-show it's status.  The format of the JSON messages is documented in the file
-https://github.com/ukoda/ATU-100-remote/blob/master/README.md
+The ATU-100 needs the firmware from
+https://github.com/randal007/ATU-100-remote (branch display-buttons-uart);
+see README.md there for wiring, the messages and the EEPROM cells.  The port
+can be a serial device or a pyserial URL such as socket://atu100.local:7000.
 '''
 
 import argparse
@@ -18,7 +15,8 @@ import curses
 import datetime
 import json
 import logging
-import serial.tools.list_ports
+import os
+import serial
 import string
 import sys
 import atu100
@@ -73,8 +71,8 @@ POWER_C     = SDATA_FIRST
 SWR_R       = 2
 SWR_C       = SDATA_FIRST
 
-REVERSE_R   = 3
-REVERSE_C   = SDATA_FIRST
+ANTENNA_R   = 3
+ANTENNA_C   = SDATA_FIRST       # antenna power and efficiency, 10 wide
 
 AUTO_R      = 4
 AUTO_C      = SDATA_FIRST
@@ -135,7 +133,8 @@ class atu100diag(object):
                       " 'l'        - Toggle inductor relay\n"
                       " 'o'        - Toggle capacitior order\n"
                       " 'r'        - Reset tuner, C and L\n"
-                      " 'T'        - Force tuning\n"
+                      " 's'        - Status and EEPROM again\n"
+                      " 'T'        - Tune (transmit a carrier until Tune shows Done)\n"
                       " 'X'        - Force board restart\n"
                       " '0' to '6' - Relay to toggle\n"
         )
@@ -145,7 +144,7 @@ class atu100diag(object):
                                          formatter_class=argparse.RawTextHelpFormatter)
 
         parse_general = parser.add_argument_group('General', 'General options')
-        parse_general.add_argument('-p', '--port', default='/dev/ttyACM0', help = 'Serial port for ATU-100')
+        parse_general.add_argument('-p', '--port', default=os.environ.get('ATU100_PORT', '/dev/ttyACM0'), help = 'Serial port or URL for ATU-100')
         parse_general.add_argument('--logfile', default='atu100.log', help = 'Log filename (atu100.log)')
         parse_general.add_argument('--log-level', type=str,
                                     dest='log_level', default='info',
@@ -193,7 +192,11 @@ class atu100diag(object):
         # Set up the ncurses style window
 
         curses.curs_set(False)
-        curses.init_color(curses.COLOR_BLACK, 0, 0, 0)
+        if curses.can_change_color():  # many terminals (tmux, ssh, console) cannot
+            try:
+                curses.init_color(curses.COLOR_BLACK, 0, 0, 0)
+            except curses.error:
+                pass
         curses.init_pair(C_GOOD_DATA,  curses.COLOR_GREEN,   curses.COLOR_BLACK)
         curses.init_pair(C_BAD_DATA,   curses.COLOR_WHITE,   curses.COLOR_RED)
         curses.init_pair(C_WARN_DATA,  curses.COLOR_MAGENTA, curses.COLOR_BLACK)
@@ -216,7 +219,7 @@ class atu100diag(object):
         # Render the static status text
         self.swin.addstr(1, 1, 'Power:      ---.- W  Order:             --')
         self.swin.addstr(2, 1, 'SWR:         -.--    Capacitance:    ----- pF')
-        self.swin.addstr(3, 1, 'Reverse:    ---.- w  Inductance:     ----- nH')
+        self.swin.addstr(3, 1, 'Ant/Eff:  -----/--%  Inductance:     ----- nH')
         self.swin.addstr(4, 1, 'Auto:    --------    Bypass:      -------- ')
         self.swin.addstr(5, 1, 'Event:               Tune:')
 
@@ -257,9 +260,10 @@ class atu100diag(object):
             r = SWR_R
             c = SWR_C
 
-        elif var == 'Reverse':
-            r = REVERSE_R
-            c = REVERSE_C
+        elif var == 'Antenna':
+            r = ANTENNA_R
+            c = ANTENNA_C
+            width = 10
 
         elif var == 'Auto':
             r = AUTO_R
@@ -290,7 +294,7 @@ class atu100diag(object):
             c = TUNE_C
 
         else:
-            self.show_error(f'Uknown var {var} with value {value}')
+            logging.warning(f'Unknown var {var} with value {value}')
             return
 
         try:
@@ -319,55 +323,39 @@ class atu100diag(object):
 
 
     def process_status_msg(self, rxmsg):
-        for name in rxmsg:
-            if name == 'Auto':
-                self.atu.auto = rxmsg[name]
-                if rxmsg[name]:
-                    self.update_var(name, 'Enabled')
-                else:
-                    self.update_var(name, 'Disabled')
-
-            elif name == 'Bypass':
-                self.atu.bypass = rxmsg[name]
-                if rxmsg[name]:
-                    self.update_var(name, 'Enabled')
-                else:
-                    self.update_var(name, 'Disabled')
-
-            elif name == 'Power':
-                self.atu.power = rxmsg[name]
-                self.update_var(name, f'{self.atu.power:.1f}') 
-
-            elif name == 'SWR':
-                self.atu.swr = rxmsg[name]
-                self.update_var(name, f'{self.atu.swr:.1f}') 
-
-            elif name == 'Reverse':
-                self.atu.reverse = rxmsg[name]
-                self.update_var(name, f'{self.atu.reverse:.1f}') 
-
-            elif name == 'Event':
-                self.update_var(name, rxmsg[name]) 
-
-            elif name == 'Order':
-                self.atu.order = rxmsg[name]
-                self.update_var(name, f'{self.atu.order}') 
-
-            elif name == 'Capacitance':
-                self.atu.capacitance = rxmsg[name]
-                self.update_var(name, f'{self.atu.capacitance}') 
-
-            elif name == 'Inductance':
-                self.atu.inductance = rxmsg[name]
-                self.update_var(name, f'{self.atu.inductance}') 
-
-            else:
-                logging.info(f'Ignored {name} = {rxmsg[name]}')
-
+        # The atu100 object has already taken the values from the message
+        atu = self.atu
+        self.update_var('Auto', 'Enabled' if atu.auto else 'Disabled')
+        self.update_var('Bypass', 'Enabled' if atu.bypass else 'Disabled')
+        self.update_var('Power', f'{atu.power:.1f}')
+        self.update_var('SWR', f'{atu.swr:.2f}', C_BAD_DATA if atu.high_swr else C_GOOD_DATA)
+        if atu.antenna is None:
+            self.update_var('Antenna', '-----/--%', C_EMPTY_DATA)
+        else:
+            self.update_var('Antenna', f'{atu.antenna:.1f}/{atu.efficiency}%')
+        self.update_var('Order', atu.order)
+        self.update_var('Capacitance', f'{atu.capacitance}')
+        self.update_var('Inductance', f'{atu.inductance}')
         self.mwin.noutrefresh()
         curses.doupdate()
         if self.process_state == ProcessState.PS_WAIT_STATUS:
             self.process_state = ProcessState.PS_GOT_STATUS
+
+
+    def process_event_msg(self, event):
+        self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'Overload', 'Error') else C_GOOD_DATA)
+        if event == 'Tune':
+            self.update_var('Tune', 'Tuning', C_WARN_DATA)
+        elif event == 'Tuned':
+            self.update_var('Tune', 'Done')
+        elif event == 'Reset':
+            self.update_var('Tune', ' ')
+        elif event == 'HighSWR':
+            self.update_var('SWR', f'{self.atu.swr:.2f}', C_BAD_DATA)
+        elif event in ('Startup', 'Restart'):
+            self.process_state = ProcessState.PS_NEED_STATUS  # settings may have changed
+        self.mwin.noutrefresh()
+        curses.doupdate()
 
 
     def show_eeprom(self):
@@ -395,7 +383,7 @@ class atu100diag(object):
                 attr = C_GOOD_DATA
             elif address < cell.EEPROM_ADDITIONAL_INDICATION:
                 attr = C_WARN_DATA
-            elif address <= cell.EEPROM_DISABLE_RELAYS:
+            elif address <= cell.EEPROM_SWR_ALARM:
                 attr = C_GOOD_DATA
             elif address >= cell.EEPROM_LAST_SWR_L:
                 attr = C_GOOD_DATA
@@ -705,13 +693,39 @@ class atu100diag(object):
         self.cwin.addstr(row, CONFIG_SECONDD, valstr, curses.color_pair(C_GOOD_DATA))
 
 
+        address = cell.EEPROM_TUNE_MODE
+        value = self.atu.eeprom[address]
+        valstr = 'Original search ' if value == 0 else 'Log grid search '
+        if log:
+            logging.info(valstr)
+        row += 1
+        self.cwin.addstr(row, CONFIG_FIRST, f'{address:02x}:')
+        self.cwin.addstr(row, CONFIG_FIRSTD, valstr, curses.color_pair(C_GOOD_DATA))
+
+        address = cell.EEPROM_SWR_ALARM
+        value = self.atu.eeprom[address]
+        attr = C_GOOD_DATA
+        if value == 0:
+            valstr = 'HighSWR off     '
+        elif value == 0xff:
+            valstr = 'HighSWR at 3.0  '
+        elif self.check_bcd(value) and value >= 0x11:
+            valstr = f'HighSWR at {value >> 4}.{value & 0xf}  '
+        else:
+            attr = C_BAD_DATA
+            valstr = 'Invalid HighSWR '
+        if log:
+            logging.info(valstr)
+        self.cwin.addstr(row, CONFIG_SECOND, f'{address:02x}:')
+        self.cwin.addstr(row, CONFIG_SECONDD, valstr, curses.color_pair(attr))
+
         address = cell.EEPROM_LAST_SWR_L
         valuelow = self.atu.eeprom[address]
         valuehi = self.atu.eeprom[address+1]
         valstr = f'Last SWR {valuehi}:{valuelow}'
         if log:
             logging.info(valstr)
-        row += 2
+        row += 1
         self.cwin.addstr(row, CONFIG_FIRST, f'{address:02x}:')
         self.cwin.addstr(row, CONFIG_FIRSTD, valstr, curses.color_pair(C_GOOD_DATA))
 
@@ -1026,6 +1040,10 @@ class atu100diag(object):
                 
                 elif 'Event' in rxmsg:
                     logging.info(f'Received event message: {rxmsg["Event"]}')
+                    self.process_event_msg(rxmsg['Event'])
+
+                elif 'Fwd' in rxmsg:
+                    logging.info(f'Detector {rxmsg}')
 
                 elif all(char in string.hexdigits for char in name):
                     cell_address = int(name, 16)

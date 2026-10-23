@@ -5,13 +5,10 @@ ATU-100 control program
 This program provides a ncurse command line for routine control of a remote
 ATU-100.
 
-The AUT-100 needs to be programmed with the hex file from
-https://github.com/ukoda/ATU-100-remote and the 3V TTL serial lines to wire to
-the board to allow comms with this program.
-
-This allows the excahnage of JSON format messages to control the ATU-100 and
-show it's status.  The format of the JSON messages is documented in the file
-https://github.com/ukoda/ATU-100-remote/blob/master/README.md
+The ATU-100 needs the firmware from
+https://github.com/randal007/ATU-100-remote (branch display-buttons-uart);
+see README.md there for wiring and the messages.  The port can be a serial
+device or a pyserial URL such as socket://atu100.local:7000.
 '''
 
 import argparse
@@ -19,7 +16,8 @@ import curses
 import datetime
 import json
 import logging
-import serial.tools.list_ports
+import os
+import serial
 import sys
 import atu100
 
@@ -44,7 +42,7 @@ C_EMPTY_DATA = 6
 # Screen locations
 
 SCREEN_WIDTH  = 48
-SCREEN_HEIGHT =  7
+SCREEN_HEIGHT =  8
 
 SDATA_FIRST        = 10
 SDATA_FIRST_WIDTH  =  8
@@ -57,13 +55,16 @@ POWER_C     = SDATA_FIRST
 SWR_R       = 2
 SWR_C       = SDATA_FIRST
 
-REVERSE_R   = 3
-REVERSE_C   = SDATA_FIRST
+ANTENNA_R   = 3
+ANTENNA_C   = SDATA_FIRST
 
-AUTO_R      = 4
+EFF_R       = 4
+EFF_C       = SDATA_FIRST + 4
+
+AUTO_R      = 5
 AUTO_C      = SDATA_FIRST
 
-EVENT_R     = 5
+EVENT_R     = 6
 EVENT_C     = SDATA_FIRST
 
 ORDER_R     = 1
@@ -75,16 +76,23 @@ CAP_C       = SDATA_SECOND
 IND_R       = 3
 IND_C       = SDATA_SECOND
 
-BYPASS_R    = 4
+DETECTOR_R  = 4
+DETECTOR_C  = SDATA_SECOND - 3   # "2697/1263", 11 wide
+
+BYPASS_R    = 5
 BYPASS_C    = SDATA_SECOND
 
-TUNE_R      = 5
+TUNE_R      = 6
 TUNE_C      = SDATA_SECOND
+
+RAW_POLL    = 1.0   # seconds between detector readings while 'v' is on
 
 
 class atu100remote(object):
     def __init__(self):
         self.atu = atu100.atu100()
+        self.raw_on = False
+        self.raw_last = 0
 
         # # JSON messages
         # self.ser         = None
@@ -104,10 +112,12 @@ class atu100remote(object):
 
         epilog_str = ("Keys to control program:\n"
                       " 'q' or ESC - exit\n"
-                      " 'a'        - Toggle auto tunning\n"
+                      " 'a'        - Toggle auto tuning\n"
                       " 'b'        - Toggle bypass\n"
                       " 'r'        - Reset tuner, C and L\n"
-                      " 't'        - Force tuning\n"
+                      " 's'        - Ask for the status\n"
+                      " 't'        - Tune (transmit a carrier until Tune shows Done)\n"
+                      " 'v'        - Detector voltages once a second, on/off\n"
         )
         parser = argparse.ArgumentParser(prog='atu-100 remote',
                                          description='Control program for ATU-100 tuner',
@@ -115,7 +125,7 @@ class atu100remote(object):
                                          formatter_class=argparse.RawTextHelpFormatter)
 
         parse_general = parser.add_argument_group('General', 'General options')
-        parse_general.add_argument('-p', '--port', default='/dev/ttyACM0', help = 'Serial port for ATU-100')
+        parse_general.add_argument('-p', '--port', default=os.environ.get('ATU100_PORT', '/dev/ttyACM0'), help = 'Serial port or URL for ATU-100')
         parse_general.add_argument('--logfile', default='atu100.log', help = 'Log filename (atu100.log)')
         parse_general.add_argument('--log-level', type=str,
                                     dest='log_level', default='info',
@@ -163,7 +173,11 @@ class atu100remote(object):
         # Set up the ncurses style window
 
         curses.curs_set(False)
-        curses.init_color(curses.COLOR_BLACK, 0, 0, 0)
+        if curses.can_change_color():  # many terminals (tmux, ssh, console) cannot
+            try:
+                curses.init_color(curses.COLOR_BLACK, 0, 0, 0)
+            except curses.error:
+                pass
         curses.init_pair(C_GOOD_DATA,  curses.COLOR_GREEN,   curses.COLOR_BLACK)
         curses.init_pair(C_BAD_DATA,   curses.COLOR_WHITE,   curses.COLOR_RED)
         curses.init_pair(C_WARN_DATA,  curses.COLOR_MAGENTA, curses.COLOR_BLACK)
@@ -183,9 +197,10 @@ class atu100remote(object):
         # Render the static status text
         self.swin.addstr(1, 1, 'Power:      ---.- W  Order:             --')
         self.swin.addstr(2, 1, 'SWR:         -.--    Capacitance:    ----- pF')
-        self.swin.addstr(3, 1, 'Reverse:    ---.- w  Inductance:     ----- nH')
-        self.swin.addstr(4, 1, 'Auto:    --------    Bypass:      -------- ')
-        self.swin.addstr(5, 1, 'Event:               Tune:')
+        self.swin.addstr(3, 1, 'Antenna:    ---.- W  Inductance:     ----- nH')
+        self.swin.addstr(4, 1, 'Efficiency:   --- %  Detector:     ---/--- mV')
+        self.swin.addstr(5, 1, 'Auto:    --------    Bypass:      -------- ')
+        self.swin.addstr(6, 1, 'Event:               Tune:')
 
         self.mwin.noutrefresh()
         self.swin.noutrefresh()
@@ -204,9 +219,19 @@ class atu100remote(object):
             r = SWR_R
             c = SWR_C
 
-        elif var == 'Reverse':
-            r = REVERSE_R
-            c = REVERSE_C
+        elif var == 'Antenna':
+            r = ANTENNA_R
+            c = ANTENNA_C
+
+        elif var == 'Efficiency':
+            r = EFF_R
+            c = EFF_C
+            width = 4
+
+        elif var == 'Detector':
+            r = DETECTOR_R
+            c = DETECTOR_C
+            width = 11
 
         elif var == 'Auto':
             r = AUTO_R
@@ -237,7 +262,7 @@ class atu100remote(object):
             c = TUNE_C
 
         else:
-            self.show_error(f'Uknown var {var} with value {value}')
+            logging.warning(f'Unknown var {var} with value {value}')
             return
 
         try:
@@ -260,8 +285,44 @@ class atu100remote(object):
 
 
     def start_tune(self):
-        self.update_var('Tune', 'Started') 
+        self.update_var('Tune', 'Sent')
         self.atu.start_tune()
+
+
+    def show_state(self, rxmsg):
+        # Show what changed with this message; the atu100 object keeps the state
+        atu = self.atu
+        if 'Auto' in rxmsg:
+            self.update_var('Auto', 'Enabled' if atu.auto else 'Disabled')
+        if 'Bypass' in rxmsg:
+            self.update_var('Bypass', 'Enabled' if atu.bypass else 'Disabled')
+        if 'Power' in rxmsg:
+            self.update_var('Power', f'{atu.power:.1f}')
+            self.update_var('Antenna', '---.-' if atu.antenna is None else f'{atu.antenna:.1f}', C_GOOD_DATA if atu.antenna is not None else C_EMPTY_DATA)
+            self.update_var('Efficiency', '---' if atu.efficiency is None else f'{atu.efficiency}', C_GOOD_DATA if atu.efficiency is not None else C_EMPTY_DATA)
+        if 'SWR' in rxmsg:
+            self.update_var('SWR', f'{atu.swr:.2f}', C_BAD_DATA if atu.high_swr else C_GOOD_DATA)
+        if 'Order' in rxmsg:
+            self.update_var('Order', atu.order)
+        if 'Capacitance' in rxmsg:
+            self.update_var('Capacitance', f'{atu.capacitance}')
+        if 'Inductance' in rxmsg:
+            self.update_var('Inductance', f'{atu.inductance}')
+        if 'Fwd' in rxmsg:
+            self.update_var('Detector', f'{atu.fwd_mv}/{atu.rev_mv}')
+        if 'Event' in rxmsg:
+            event = rxmsg['Event']
+            self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'Overload', 'Error') else C_GOOD_DATA)
+            if event == 'Tune':
+                self.update_var('Tune', 'Tuning', C_WARN_DATA)
+            elif event == 'Tuned':
+                self.update_var('Tune', 'Done', C_COMPLETE)
+            elif event == 'Reset':
+                self.update_var('Tune', ' ')
+            elif event == 'HighSWR':
+                self.update_var('SWR', f'{atu.swr:.2f}', C_BAD_DATA)
+        if 'Build' in rxmsg:
+            self.swin.addstr(0, 2, f' ATU-100 Remote, {atu.info.get("Build", "")} ')
 
 
     def main(self, stdscr):
@@ -326,6 +387,17 @@ class atu100remote(object):
             elif key == ord('t'):
                 self.start_tune()
 
+            elif key == ord('v'):
+                self.raw_on = not self.raw_on
+                if not self.raw_on:
+                    self.update_var('Detector', '---/---', C_EMPTY_DATA)
+
+            # Detector voltages once a second while 'v' is on
+
+            if self.raw_on and time() - self.raw_last >= RAW_POLL and not self.atu.tuning:
+                self.raw_last = time()
+                self.atu.request_raw()
+
             elif key != -1:                    # Not 'no key' - Show key usage
                  logging.warning(f'Unknown key: {key}')
 
@@ -334,50 +406,7 @@ class atu100remote(object):
             rxmsg = self.atu.getmsg()
             if rxmsg:
                 logging.debug(rxmsg)
-                for name in rxmsg:
-                    if name == 'Auto':
-                        self.atu.auto = rxmsg[name]
-                        if rxmsg[name]:
-                            self.update_var(name, 'Enabled')
-                        else:
-                            self.update_var(name, 'Disabled')
-
-                    elif name == 'Bypass':
-                        self.atu.bypass = rxmsg[name]
-                        if rxmsg[name]:
-                            self.update_var(name, 'Enabled')
-                        else:
-                            self.update_var(name, 'Disabled')
-
-                    elif name == 'Power':
-                        self.atu.power = rxmsg[name]
-                        self.update_var(name, f'{self.atu.power:.1f}') 
-
-                    elif name == 'SWR':
-                        self.atu.swr = rxmsg[name]
-                        self.update_var(name, f'{self.atu.swr:.1f}') 
-
-                    elif name == 'Reverse':
-                        self.atu.reverse = rxmsg[name]
-                        self.update_var(name, f'{self.atu.reverse:.1f}') 
-
-                    elif name == 'Event':
-                        self.update_var(name, rxmsg[name]) 
-
-                    elif name == 'Order':
-                        self.atu.order = rxmsg[name]
-                        self.update_var(name, f'{self.atu.order}') 
-
-                    elif name == 'Capacitance':
-                        self.atu.capacitance = rxmsg[name]
-                        self.update_var(name, f'{self.atu.capacitance}') 
-
-                    elif name == 'Inductance':
-                        self.atu.inductance = rxmsg[name]
-                        self.update_var(name, f'{self.atu.inductance}') 
-
-                    else:
-                        logging.info(f'Ignored {name} = {rxmsg[name]}')
+                self.show_state(rxmsg)
 
             self.mwin.noutrefresh()
             curses.doupdate()

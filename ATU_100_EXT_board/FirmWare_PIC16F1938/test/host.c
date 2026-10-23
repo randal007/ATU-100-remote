@@ -17,6 +17,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
 #include "xc.h"
 
 volatile porta_t PORTA_r;
@@ -225,9 +229,16 @@ static int from_pic_len, mark, framing_errors;
 static int rx_level = 1, rx_active, rx_bit, rx_byte;
 static double rx_start;
 
+static int pty = -1; // PTY=1: the serial line is also a pseudo terminal
+
 static void received(char c)
 {
     static double line_start;
+    if (pty >= 0) {
+        if (write(pty, &c, 1) < 0) { /* nobody reading */ }
+        if (getenv("QUIET"))
+            return;
+    }
     if (from_pic_len < (int)sizeof from_pic - 1) {
         if (from_pic_len == 0 || from_pic[from_pic_len - 1] == '\n')
             line_start = secs();
@@ -314,9 +325,42 @@ static double last_value(const char *name)
 
 static void scenario(void);
 
+// PTY mode: take what the program on the pty sends, and keep simulated
+// time in step with the wall clock so its timeouts behave.
+static void pty_tick(void)
+{
+    static struct timespec start;
+    static unsigned long n;
+    char buf[64];
+    if (start.tv_sec == 0)
+        clock_gettime(CLOCK_MONOTONIC, &start);
+    static char line[200];
+    static int len;
+    ssize_t got_n = read(pty, buf, sizeof buf);
+    for (ssize_t i = 0; i < got_n; i++) {
+        to_pic[to_pic_in++ % sizeof to_pic] = buf[i];
+        if (buf[i] == '\n' || len == sizeof line - 1) {
+            line[len] = 0;
+            printf("  %7.2f  PC>  %s\n", secs(), line);
+            len = 0;
+        } else if (buf[i] != '\r')
+            line[len++] = buf[i];
+    }
+    if (++n % 200 == 0) { // every ~10 ms
+        struct timespec t;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        double wall = (t.tv_sec - start.tv_sec) + (t.tv_nsec - start.tv_nsec) / 1e9;
+        if (secs() > wall)
+            usleep((useconds_t)((secs() - wall) * 1e6));
+    }
+}
+
 static void tick(void)
 {
-    scenario();
+    if (pty >= 0)
+        pty_tick();
+    else
+        scenario();
     for (int b = 0; b < 3; b++) {
         int pressed = secs() < button_until[b];
         if (b == 0) PORTB_r.RB0 = !pressed;
@@ -502,6 +546,7 @@ static void scenario(void)
         if (got("\"Bypass\":true")) {
             check(relays_l() == 0 && relays_c() == 0, "bypass button releases all relays");
             check_display(display_has(0, "_"), "display shows the bypass mark");
+            check(last_value("Efficiency") < 70, "efficiency follows the SWR into bypass");
             check(got("\"Capacitance\":0,\"Inductance\":0"), "status reports the released relays in bypass");
             host_show_display("bypass by button");
             next();
@@ -637,6 +682,28 @@ int main(void)
     misc_r.nTO = 1;
     PORTB_r.v = 0x07; // buttons up
     printf("ATU-100 host test: display type %d, Arduino baud error %+.1f%%\n", display_type, err);
+    if (getenv("PTY")) {
+        /* The serial line on a pseudo terminal, in real time, with a carrier
+           into a 35+j30 ohm antenna, for testing the python tools */
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        pty = posix_openpt(O_RDWR | O_NOCTTY);
+        grantpt(pty);
+        unlockpt(pty);
+        fcntl(pty, F_SETFL, O_NONBLOCK);
+        // Raw mode, held by keeping the other side open: no echo of what
+        // the tuner sends back into the tuner, no newline translation
+        int side = open(ptsname(pty), O_RDWR | O_NOCTTY);
+        struct termios tio;
+        tcgetattr(side, &tio);
+        cfmakeraw(&tio);
+        tcsetattr(side, TCSANOW, &tio);
+        printf("serial port: %s\n", ptsname(pty));
+        FILE *f = fopen("pty_name", "w");
+        fprintf(f, "%s\n", ptsname(pty));
+        fclose(f);
+        fflush(stdout);
+        fwd_mv = getenv("NO_RF") ? 0 : 900;
+    }
     fw_main();
     return 0;
 }

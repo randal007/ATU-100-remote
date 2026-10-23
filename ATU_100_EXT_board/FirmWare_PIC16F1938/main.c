@@ -44,6 +44,7 @@ char g_b_tune_btn_released;
 
 bool new_state = false; // send a status message
 int g_i_Power_tx = 0;    // transmitter power, as shown after PWR=
+int g_i_loss_swr_old = 0; // SWR the antenna power was last worked out for
 int e_i_swr_alarm;       // HighSWR event above this, SWR * 100; 0 = off
 char g_b_swr_alarm = 0;  // HighSWR sent, waiting for the SWR to come down
 
@@ -866,9 +867,12 @@ void show_pwr(int parm_Power, int parm_SWR)
       g_b_Loss_mode = 0;
       g_i_Efficency = 0;
    }
-   if (parm_Power != g_i_Power_old)
+   // Antenna power and efficiency depend on the SWR too: redo them when
+   // either changes (N7DDC's code only looked at the power)
+   if (parm_Power != g_i_Power_old | (g_b_Loss_mode == 1 & parm_SWR != g_i_loss_swr_old))
    {
       g_i_Power_old = parm_Power;
+      g_i_loss_swr_old = parm_SWR;
       g_i_Power_tx = parm_Power;
       g_i_Power_report = parm_Power;
       new_state = true;
