@@ -12,7 +12,8 @@ tuner.
 - A tuning search that finds a match far more often than the original
   (the original is still there, one setting away).
 - High SWR alarm, detector readings, settings that apply without a restart.
-- Python tools for a computer, and an Arduino Mega sketch to start from.
+- **atutop**, a btop-style terminal program with gauges, graphs and mouse
+  control; Python tools for scripting; an Arduino Mega sketch to start from.
 - A PC simulator that runs the real firmware code, so it can be tested
   without a tuner.
 
@@ -34,6 +35,7 @@ See [History](#history) for the line of projects it comes from.
 - [Serial protocol](#serial-protocol)
 - [Settings (EEPROM cells)](#settings-eeprom-cells)
 - [Tuning searches](#tuning-searches)
+- [atutop](#atutop)
 - [Python tools](#python-tools)
 - [Arduino Mega sketch](#arduino-mega-sketch)
 - [Building](#building)
@@ -292,6 +294,44 @@ The simulator's antenna and detector are idealised, so these numbers need
 confirming on the air. Compare the two on your own antennas by switching
 cell 36: `atu100.py --search original` and `--search grid`.
 
+## atutop
+
+A terminal program in the style of btop, written in Rust: one file, no
+Python needed.
+
+![atutop](docs/atutop.png)
+
+- **power**: transmitter power, antenna power and efficiency, a gradient
+  meter and a five-minute history graph. The scale follows the peak.
+- **swr**: SWR with a meter from 1.0 to 3.0, the HighSWR limit marked on it,
+  and its history. The box flashes red on a HighSWR alarm.
+- **tuner**: inductance, capacitance, capacitor side, detector voltages,
+  auto, bypass, the tuning search and the HighSWR limit.
+- **relays**: every inductor and capacitor; lit ones are switched in.
+  **Click one to switch it**, click the LC/CL chip to move the capacitors.
+- **events**: tunes, resets, alarms, with times.
+- While tuning, the power box shows **TUNING · transmit a carrier**.
+
+Mouse: click the buttons at the bottom, the relays, Auto, Bypass, Search or
+Detector; the scroll wheel on HighSWR changes the limit. Keys: `t` tune,
+`b` bypass, `a` auto, `r` reset, `s` status, `v` detector voltages once a
+second, `g` tuning search, `[` `]` HighSWR limit, `q` quit.
+
+```
+atutop                          # $ATU100_PORT, else /dev/ttyACM0
+atutop /dev/ttyUSB0
+atutop socket://atu100.local:7000
+```
+
+It works from 80×24 up and takes the port for itself, so it and the Python
+tools cannot talk to the tuner at the same time. It reads the settings and
+relay values from the tuner when it starts (about 6 seconds).
+
+Build it with Rust (stable): `cd tui && cargo build --release`, giving
+`tui/target/release/atutop`; copy it somewhere on your PATH. It uses
+ratatui, crossterm and serialport, which also run on Windows and macOS,
+but it has only been tried on Linux.
+
 ## Python tools
 
 In the `python` folder; they need Python 3 and pyserial
@@ -451,7 +491,8 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   time and drives the Python tools against it, including a settings backup
   and restore.
 - `PTY=1 ./host_test` alone gives a simulated tuner on a pseudo terminal
-  for trying anything by hand; the port name is printed.
+  for trying anything by hand, atutop included; the port name is printed.
+  Add `RF_WAVE=1` for a speech-like carrier instead of a steady one.
 
 The simulator cannot check the real I2C display timing, the interrupt's
 share of the CPU, or RF in the box.
@@ -469,6 +510,9 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938`:
 | `oled_control.c`, `font5x8.h` | display drivers: OLEDs, 1602 LCD, two-colour LED |
 | `cross_compiler.c/.h` | pins, EEPROM cell numbers, delays, ADC, fuses |
 | `pic_init.c` | port and peripheral set-up |
+
+atutop is in `tui/src`: `link.rs` (serial or TCP), `tuner.rs` (state from
+the tuner's messages), `ui.rs` (drawing), `main.rs` (keys, mouse, commands).
 
 ## Limitations and ideas
 
@@ -503,5 +547,5 @@ Each project started from the one before it:
    branch `display-buttons-uart` (this): Randal Warren, VE7NHW. Display and
    buttons back (WA1RCT's XC8 display code), serial on the Tx_req pins,
    the log grid tuning search, HighSWR, detector readings, live settings,
-   bug fixes, the updated Python tools, the Arduino sketch and the
+   bug fixes, atutop, the updated Python tools, the Arduino sketch and the
    simulator.

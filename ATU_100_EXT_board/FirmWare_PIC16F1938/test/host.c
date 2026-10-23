@@ -346,6 +346,10 @@ static void pty_tick(void)
         } else if (buf[i] != '\r')
             line[len++] = buf[i];
     }
+    if (getenv("RF_WAVE") && n % 200 == 0) { // speech-like carrier for the graphs
+        double s = secs();
+        fwd_mv = 900 * (0.35 + 0.65 * fabs(sin(s * 1.7)) * (0.6 + 0.4 * sin(s * 0.31)));
+    }
     if (++n % 200 == 0) { // every ~10 ms
         struct timespec t;
         clock_gettime(CLOCK_MONOTONIC, &t);

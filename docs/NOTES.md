@@ -13,6 +13,9 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 - Python tools updated for it and fixed (bypass command, relay side,
   curses colour crash, hex converter); `test/python_tools.sh` drives them
   against the simulator.
+- atutop (tui/, Rust + ratatui): btop-style terminal program with power and
+  SWR gauges and graphs, clickable relays and buttons; installed to
+  ~/.local/bin/atutop. Tried against the simulator only.
 - README.md is the full manual (wiring, installing, protocol, every cell,
   tools, history of the forks).
 - Tested only in the PC simulator (`test/run.sh`, `test/python_tools.sh`).
