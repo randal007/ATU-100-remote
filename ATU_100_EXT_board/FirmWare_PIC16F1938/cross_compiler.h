@@ -175,7 +175,7 @@ extern "C" {
 
     void Test_init(void);
 
-    /*  Serial port on the Tx_req pins, 9 and 10 (see Wiring.md): RA6 (/Tx_req)
+    /*  Serial port on the Tx_req pins, 9 and 10 (see README.md): RA6 (/Tx_req)
         receives, RA7 (Tx_req) transmits. The tuner's Tx_req output is
         replaced by the "Tune" and "Tuned" events. */
 #define UART_IN_PIN  PORTAbits.RA6

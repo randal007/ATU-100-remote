@@ -4,7 +4,7 @@
 //
 //   Display, all three buttons and serial remote control together:
 //   WA1RCT's XC8 port of N7DDC firmware 3.2 with the JSON serial protocol
-//   from ukoda/PP5OO. Serial runs on the Tx_req pads, see Wiring.md.
+//   from ukoda/PP5OO. Serial runs on the Tx_req pins 9 and 10, see README.md.
 
 #include "cross_compiler.h"
 #include "oled_control.h"

@@ -19,7 +19,7 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 
 - RA6/RA7 (PIC pins 9 and 10) are not routed on N7DDC's EXT PCB; solder fine
   wire to the pins. 10k pull-up on RA6 (to the partner's logic voltage).
-  Picture: `docs/atu100_ra6_ra7.png`. A photo of the actual board would
+  Picture: `docs/atu100_ra6_ra7.png`. README.md is the manual. A photo of the actual board would
   confirm it is not a clone with a different layout.
 - PROG header (MCLR, +5V, GND, DAT, CLK) doubles as the display connector.
 - The tuner's 5 V is a 78L05 (100 mA): power nothing extra from it.
