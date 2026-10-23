@@ -6,10 +6,16 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 
 ## Where things stand (2026-10-22)
 
-- Firmware on branch `display-buttons-uart`: display + buttons + serial,
-  bug fixes, new tuning search, Power/Antenna/Efficiency, `{"Raw":true}`,
-  live settings, `HighSWR` event. 14835 of 16384 words.
-- Tested only in the PC simulator (`test/run.sh`): 9 runs x 24 checks pass.
+- Firmware on branch `display-buttons-uart` (the fork's default branch):
+  display + buttons + serial, bug fixes, log grid tuning search,
+  Power/Antenna/Efficiency, `{"Raw":true}`, live settings, `HighSWR` event.
+  14859 of 16384 words.
+- Python tools updated for it and fixed (bypass command, relay side,
+  curses colour crash, hex converter); `test/python_tools.sh` drives them
+  against the simulator.
+- README.md is the full manual (wiring, installing, protocol, every cell,
+  tools, history of the forks).
+- Tested only in the PC simulator (`test/run.sh`, `test/python_tools.sh`).
   **Never flashed or tried on air yet.**
 - Programmer: PICkit 3, which needs MPLAB X / IPE v6.20 or older.
 - Next: back up the tuner's eeprom, flash, check display/buttons/serial,
