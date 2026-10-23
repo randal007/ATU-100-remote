@@ -17,6 +17,10 @@
 
 #define DEFAULT_INITIAL_OLD_VALUE  10000
 
+// Sent at start-up as "Build"; raise the revision with each release
+#define FW_REVISION "1.0"
+#define FW_BUILD    "VE7NHW display+serial " FW_REVISION ", " __DATE__
+
 // Variables
 int g_i_SWR_fixed_old = 0;
 char g_work_str[7], g_work_str_2[7];
@@ -789,7 +793,7 @@ void lcd_prep()
       json_str("Board", "ATU-100_EXT");
       json_str("Credit", "N7DDC");
       json_str("FW", "3.2");
-      json_str("Build", "ukoda+display");
+      json_str("Build", FW_BUILD);
       json_end();
       if (big_oled())
       { // 128*64 OLED

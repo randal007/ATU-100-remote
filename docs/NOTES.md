@@ -9,7 +9,10 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 - Firmware on branch `display-buttons-uart` (the fork's default branch):
   display + buttons + serial, bug fixes, log grid tuning search,
   Power/Antenna/Efficiency, `{"Raw":true}`, live settings, `HighSWR` event.
-  15057 of 16384 words, 662 bytes RAM.
+  15082 of 16384 words, 662 bytes RAM.
+- Revision: `FW_REVISION` in main.c (now "1.0"), sent in the Startup
+  board message as `"Build":"VE7NHW display+serial 1.0, <build date>"`;
+  atutop shows it at the top. Raise it with each release.
 - 2026-10-23 serial robustness: 128 byte receive buffer; the measuring
   loop breaks off when a message starts (counting `{`, not `}`: a command
   is acted on before its `}` is read); damaged messages are dropped (a `{`

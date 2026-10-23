@@ -195,7 +195,7 @@ the display-off timer (cell 32).
 
 | Event | When |
 |---|---|
-| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"..."}` |
+| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.0, Oct 23 2026"}`: the firmware's revision and build date, shown at the top of atutop |
 | `Restart` | the watchdog restarted the tuner |
 | `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal |
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
@@ -483,7 +483,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15057 of 16384 program words (92%) and 662 of 1024
+The firmware uses 15082 of 16384 program words (92%) and 662 of 1024
 bytes of RAM.
 
 ## Testing without a tuner
