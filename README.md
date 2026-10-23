@@ -614,7 +614,8 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   Add `RF_WAVE=1` for a speech-like carrier instead of a steady one.
 - `./esp32_sim.py TUNER_PORT` puts a simulated ESP32 bridge in front of it
   (USB port, TCP, the search, Wi-Fi settings, and atutop's browser version
-  with its WebSocket when `tui/dist` is built; it prints the web port).
+  with its WebSocket when `tui/dist` is built): web page on port 8080 and
+  WebSocket on 8081 (the real bridge: 80 and 81), or the next free pair.
   atutop's connect screen starts both: **simulator**.
 
 The simulator cannot check the real I2C display timing, the interrupt's

@@ -46,6 +46,7 @@ import tty
 VERSION = 'sim'
 PORT = 7000
 FIND_PORT = 7001
+WEB_PORT = 8080  # the real bridge uses 80 and 81; below 1024 needs root here
 HOST = 'atu100.local'
 HOTSPOT = 'ATU100-setup'
 HOTSPOT_IP = '192.168.73.1'  # pretend: nothing listens there on this PC
@@ -177,15 +178,21 @@ class Bridge:
                 continue
         self.server.listen(2)
         self.last_status = ''
-        self.ws_server = socket.socket()
-        self.ws_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.ws_server.bind(('127.0.0.1', 0))
+        # The web page on 8080 and its WebSocket on 8081, or the next free
+        # pair when another simulator has them
+        for self.web_port in range(WEB_PORT, WEB_PORT + 20, 2):
+            self.ws_port = self.web_port + 1
+            self.ws_server = socket.socket()
+            self.ws_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.ws_server.bind(('127.0.0.1', self.ws_port))
+                self.web = http.server.ThreadingHTTPServer(('127.0.0.1', self.web_port), self.page_handler())
+                break
+            except OSError:
+                self.ws_server.close()
         self.ws_server.listen(4)
         self.ws_server.setblocking(False)
-        self.ws_port = self.ws_server.getsockname()[1]
         self.ws_clients = []
-        self.web = http.server.ThreadingHTTPServer(('127.0.0.1', 0), self.page_handler())
-        self.web_port = self.web.server_address[1]
         threading.Thread(target=self.web.serve_forever, daemon=True).start()
 
         try:
