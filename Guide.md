@@ -1,6 +1,6 @@
 # ATU-100 remote usage guide
 
-This guide is intended to help step you through the process of modifying, setting up and using an ATU-100 for remote operation.  The LCD display will be disconnected as this software can not drive both the LCD and UART.
+This guide is intended to help step you through the process of modifying, setting up and using an ATU-100 for remote operation.  On this branch the display stays connected; unplug it only while programming.
 
 It should be noted the instructions here assume you are using a Linux PC.  If you are not using Linux you will need to work out the equivelent steps for your OS.  I only have Linux PCs now as they are so much easier to use for this kind of development work.
 
@@ -56,8 +56,8 @@ You will need:
 	1. Flash the new firmware using: `pk2cmd -B/your/path/to/pk2cmd/pk2cmd -PPIC16F1938 -FATU-100_remote_PIC16F1938_XXXXXXXX_YYYY.hex -E -M -J -R`
 3. Test the software is running:
 	1. Disconnect the programmer and power off.
-	2. Wire the TTL serial TXD data line from the PC to the pad on the rear of the PCBA named ... TODO: Check the label on the PCBA.
-	3. Wire the TTL serial RXD data line to the PC to the pad on the rear of the PCBA named ... TODO: Check the label on the PCBA.
+	2. Wire the TTL serial TXD data line from the PC to the `RA6 - /Tx_req` pad (PIC pin 10), with a 10 kΩ pull-up to +5 V. See [Wiring.md](Wiring.md).
+	3. Wire the TTL serial RXD data line to the PC to the `RA7 - Tx_req` pad (PIC pin 9).
 	4. Connect the serial adaptor or cable.  In this example we are assuming it is `/dev/ttyUSB0`
 	4. Power on the ATU-100.
 	5. Goto the `python` directory in this project.

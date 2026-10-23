@@ -4,7 +4,10 @@ This is a firmware for using the popular open source ATU-100 Antenna Tuner in re
 
 This is very useful, for example, to have the tuner right at the feedpoint of the antenna.
 
-It assumes there is no local display so the eeprom cell settings related to the displays are ignored.
+**This branch keeps the display and all three buttons working** and puts the
+serial port on the Tx_req pins instead. It also has a tuning search that
+finds a match more often, and a PC simulator for testing. See [Wiring.md](Wiring.md) for wiring,
+programming and the differences from the protocol below.
 
 Serial messages are JSON format with the assumption there will be external control software.  Line endings are Linux style.
 
@@ -33,9 +36,9 @@ Just load it on PICkit or any other tool you use for writing the microcontroller
 
 The serial routine runs at a baud-rate of 4800 bps.  The timer limits the reliable data receive rate to this speed.
 
-Use the 3V TTL pins on the rear of PCBA:
-* RB1 - Pin 22 - TXD from ATU-100.
-* RB2 - Pin 23 - RXD to ATU-100.
+5 V TTL on the Tx_req pins (this branch, see [Wiring.md](Wiring.md)):
+* RA7 - Pin 9 - TXD from ATU-100.
+* RA6 - Pin 10 - RXD to ATU-100, with a 10 kΩ pull-up to +5 V.
 
 ## JSON messages
 
