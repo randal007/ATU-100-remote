@@ -171,6 +171,12 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    reports this PC's LAN address (192.168.88.5). ufw rule added 2026-10-23
    with his OK: 8080:8081/tcp from 192.168.88.0/24, comment "ATU-100
    simulator web page (atutop)"; remove with `sudo ufw delete` if unwanted.
+   Phone keyboard (he tested on his phone): one real <input> per visible
+   field (taps must land on a real box); Ratzilla's resize handler empties
+   its parent element, so it draws into <div id="screen"> and the inputs
+   live in <body> (grid id is then screen_ratzilla_grid); viewport
+   interactive-widget=resizes-visual; a focused box is never hidden while
+   its field is still in the settings; settings compact on short screens.
    Was the plan: split tui/
    into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
    shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui

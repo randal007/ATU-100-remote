@@ -101,6 +101,9 @@ struct Overlay {
     focused: Option<Field>, // the field atutop had selected last frame
 }
 
+/// Ratzilla's grid, inside <div id="screen">: one <pre> per row, one <span> per cell
+const GRID: &str = "screen_ratzilla_grid";
+
 const FIELDS: [Field; 5] = [Field::Network, Field::Password, Field::Ip, Field::Gateway, Field::Mask];
 
 impl Overlay {
@@ -173,7 +176,7 @@ impl Overlay {
         let settings = core.app.settings.as_ref().filter(|_| core.may_set_wifi());
         // Screen cells are spans in one <pre> per row
         let cell = |x: u16, y: u16| -> Option<web_sys::DomRect> {
-            let grid = document.get_element_by_id("grid")?;
+            let grid = document.get_element_by_id(GRID)?;
             let row = grid.children().item(y as u32)?;
             Some(row.children().item(x as u32)?.get_bounding_client_rect())
         };
@@ -185,7 +188,15 @@ impl Overlay {
                 let (a, b) = (cell(rect.x, rect.y)?, cell(rect.x + rect.width - 1, rect.y)?);
                 Some((s, a, b))
             });
+            let is_active = active.as_ref().is_some_and(|e| e == input.unchecked_ref::<web_sys::Element>());
             let Some((s, a, b)) = place else {
+                // The box with the keyboard stays while its field is still in
+                // the settings, even if one frame did not draw it: hiding it
+                // would put the phone's keyboard away
+                let still = settings.is_some_and(|s| s.fields().contains(field));
+                if is_active && still {
+                    continue;
+                }
                 if style.get_property_value("display").unwrap_or_default() != "none" {
                     let _ = style.set_property("display", "none");
                     let _ = input.blur();
@@ -210,7 +221,6 @@ impl Overlay {
                 Field::Gateway => &s.gateway,
                 Field::Mask => &s.mask,
             };
-            let is_active = active.as_ref().is_some_and(|e| e == input.unchecked_ref::<web_sys::Element>());
             any_focused |= is_active;
             // atutop's text unless the box is being typed in; and the box
             // follows when atutop moves to another field (Tab, a network
@@ -251,7 +261,7 @@ fn map_key(e: &web_sys::KeyboardEvent) -> Option<Key> {
 /// whatever the grid's size (Ratzilla builds a new grid on a resize).
 fn cell_at(target: Option<web_sys::EventTarget>) -> Option<(u16, u16)> {
     let el: web_sys::Element = target?.dyn_into().ok()?;
-    let span = el.closest("#grid > pre > span").ok()??;
+    let span = el.closest(&format!("#{GRID} > pre > span")).ok()??;
     let index = |mut e: web_sys::Element| {
         let mut i = 0u16;
         while let Some(prev) = e.previous_element_sibling() {
@@ -288,7 +298,7 @@ pub fn main() {
     core.borrow_mut().t.log(format!("Connecting to {}", link.borrow().url), Kind::Info);
     link.borrow_mut().connect();
 
-    let backend = DomBackend::new().expect("the page");
+    let backend = DomBackend::new_by_id("screen").expect("the page");
     let terminal = ratatui::Terminal::new(backend).expect("the screen");
     let overlay = Overlay::new(core.clone());
 

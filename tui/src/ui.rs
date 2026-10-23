@@ -662,6 +662,9 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         Some(true) => 13,
         _ => 10,
     };
+    // Too short for everything (a phone with its keyboard up): keep the
+    // fields and the buttons, drop the status rows and shorten the list
+    let compact = usb && body.height < want_h;
     let w = body.width.saturating_sub(2).min(74);
     let h = body.height.min(want_h);
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
@@ -697,18 +700,20 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         (Some(false), _, true) => "network, no ESP32 bridge",
         (Some(false), _, false) => "straight to the tuner, or through the Mega",
     };
-    put(buf, y, vec![label("Link", lw), value(app.port.clone()), dim(format!("  {how}"))]);
-    if !app.in_browser {
-        let bw = " change ".chars().count() as u16;
-        button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "change", Action::ChangeLink, true, hits);
-    }
-    y += 1;
-    if esp.present == Some(true) {
-        put(buf, y, vec![label("ESP32", lw), value(format!("bridge {}", esp.version))]);
+    if !compact {
+        put(buf, y, vec![label("Link", lw), value(app.port.clone()), dim(format!("  {how}"))]);
+        if !app.in_browser {
+            let bw = " change ".chars().count() as u16;
+            button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "change", Action::ChangeLink, true, hits);
+        }
+        y += 1;
+        if esp.present == Some(true) {
+            put(buf, y, vec![label("ESP32", lw), value(format!("bridge {}", esp.version))]);
+            y += 1;
+        }
+        rule(buf, y);
         y += 1;
     }
-    rule(buf, y);
-    y += 1;
 
     match esp.present {
         None => {
@@ -731,51 +736,54 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         Some(true) => {}
     }
 
-    // Wi-Fi state
-    let state = match esp.wifi.as_str() {
-        "Connected" => vec![colored("● ".into(), GREEN), value("connected  ".into()), value(esp.ssid.clone()), dim(format!("  {} {} dBm", bars(esp.rssi), esp.rssi))],
-        "Connecting" => vec![colored("● ".into(), YELLOW), value(format!("joining {}…", esp.ssid))],
-        "Failed" => vec![colored("● ".into(), RED), colored(format!("cannot join {}", esp.ssid), RED), dim("  trying again".into())],
-        _ => vec![colored("○ ".into(), INACTIVE), value("not set up".into())],
-    };
-    let mut line = vec![label("Wi-Fi", lw)];
-    line.extend(state);
-    put(buf, y, line);
-    y += 1;
-    if let Some(port) = esp.wifi_port() {
-        let addr = port.trim_start_matches("socket://").to_string();
-        let how = if esp.static_ip.is_empty() { "from the router" } else { "fixed" };
-        let host = if esp.host.is_empty() { format!("  {how}") } else { format!("  {how} · {}", esp.host) };
-        put(buf, y, vec![label("Address", lw), value(addr), dim(host)]);
-        if esp.over_usb && !app.in_browser && y < bottom {
-            let bw = " use Wi-Fi ".chars().count() as u16;
-            button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "use Wi-Fi", Action::UseWifi, true, hits);
+    if !compact {
+        // Wi-Fi state
+        let state = match esp.wifi.as_str() {
+            "Connected" => vec![colored("● ".into(), GREEN), value("connected  ".into()), value(esp.ssid.clone()), dim(format!("  {} {} dBm", bars(esp.rssi), esp.rssi))],
+            "Connecting" => vec![colored("● ".into(), YELLOW), value(format!("joining {}…", esp.ssid))],
+            "Failed" => vec![colored("● ".into(), RED), colored(format!("cannot join {}", esp.ssid), RED), dim("  trying again".into())],
+            _ => vec![colored("○ ".into(), INACTIVE), value("not set up".into())],
+        };
+        let mut line = vec![label("Wi-Fi", lw)];
+        line.extend(state);
+        put(buf, y, line);
+        y += 1;
+        if let Some(port) = esp.wifi_port() {
+            let addr = port.trim_start_matches("socket://").to_string();
+            let how = if esp.static_ip.is_empty() { "from the router" } else { "fixed" };
+            let host = if esp.host.is_empty() { format!("  {how}") } else { format!("  {how} · {}", esp.host) };
+            put(buf, y, vec![label("Address", lw), value(addr), dim(host)]);
+            if esp.over_usb && !app.in_browser && y < bottom {
+                let bw = " use Wi-Fi ".chars().count() as u16;
+                button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "use Wi-Fi", Action::UseWifi, true, hits);
+            }
+            y += 1;
+        }
+        let mut line = vec![label("Hotspot", lw)];
+        if esp.hotspot {
+            line.extend([colored("● ".into(), GREEN), value(format!("on  {}", esp.hotspot_name)), dim(format!("  {}", esp.hotspot_ip))]);
+        } else {
+            line.extend([colored("○ ".into(), INACTIVE), value("off".into()), dim("  on when there is no network".into())]);
+        }
+        put(buf, y, line);
+        if usb && y < bottom {
+            let text = if esp.hotspot_always { "● always on" } else { "○ always on" };
+            let bw = text.chars().count() as u16 + 2;
+            if inner.width < 60 {
+                // a phone: on a row of its own, under the hotspot
+                y += 1;
+                if y < bottom {
+                    button(buf, inner.x + 1 + lw as u16, y, text, Action::HotspotAlways, true, hits);
+                }
+            } else {
+                button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, text, Action::HotspotAlways, true, hits);
+            }
         }
         y += 1;
+        rule(buf, y);
+        y += 1;
+    
     }
-    let mut line = vec![label("Hotspot", lw)];
-    if esp.hotspot {
-        line.extend([colored("● ".into(), GREEN), value(format!("on  {}", esp.hotspot_name)), dim(format!("  {}", esp.hotspot_ip))]);
-    } else {
-        line.extend([colored("○ ".into(), INACTIVE), value("off".into()), dim("  on when there is no network".into())]);
-    }
-    put(buf, y, line);
-    if usb && y < bottom {
-        let text = if esp.hotspot_always { "● always on" } else { "○ always on" };
-        let bw = text.chars().count() as u16 + 2;
-        if inner.width < 60 {
-            // a phone: on a row of its own, under the hotspot
-            y += 1;
-            if y < bottom {
-                button(buf, inner.x + 1 + lw as u16, y, text, Action::HotspotAlways, true, hits);
-            }
-        } else {
-            button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, text, Action::HotspotAlways, true, hits);
-        }
-    }
-    y += 1;
-    rule(buf, y);
-    y += 1;
 
     if !usb {
         let note = format!("Wi-Fi settings change over USB, or from the bridge's own hotspot ({}): connect that way to choose another network.", esp.hotspot_name);
@@ -800,6 +808,9 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         buf.set_string(x + bw, y, note, Style::new().fg(GRAPH_TEXT));
     }
     y += 1;
+    // rows the fields and buttons below need: leave them room
+    let below = 7 + if set.fixed { 3 } else { 0 };
+    let nets = nets.min(bottom.saturating_sub(y).saturating_sub(below));
     for (i, net) in esp.networks.iter().take(nets as usize).enumerate() {
         if y >= bottom {
             break;
