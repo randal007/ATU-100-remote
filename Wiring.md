@@ -70,7 +70,8 @@ The protocol is ukoda's (see README.md), with these differences:
   including waking the display.
 - Eeprom cell `0x36` picks the tuning search: `0` is N7DDC's original,
   anything else (the default, `0xFF` on a stock eeprom) is the log grid search.
-  `{"Set": 54, "Value": 0}` switches to the original.
+  `{"Set": 54, "Value": 0}` switches to the original from the next restart
+  (power cycle, or `{"x": true}`).
 
 ## Arduino Mega starting point
 
