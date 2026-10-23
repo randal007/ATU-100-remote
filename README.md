@@ -5,7 +5,7 @@ This is a firmware for using the popular open source ATU-100 Antenna Tuner in re
 This is very useful, for example, to have the tuner right at the feedpoint of the antenna.
 
 **This branch keeps the display and all three buttons working** and puts the
-serial port on the Tx_req pins instead. It also has a tuning search that
+serial port on the two Tx_req pins (PIC pins 9 and 10) instead. It also has a tuning search that
 finds a match more often, and a PC simulator for testing. See [Wiring.md](Wiring.md) for wiring,
 programming and the differences from the protocol below.
 

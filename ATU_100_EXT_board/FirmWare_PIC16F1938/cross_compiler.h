@@ -58,6 +58,7 @@ extern "C" {
 #define EEPROM_LAST_SWR_H 252
 #define EEPROM_LAST_SWR_L 251
 
+#define EEPROM_SWR_ALARM 0x37
 #define EEPROM_TUNE_MODE 0x36
 #define EEPROM_DISABLE_RELAYS 0x35
 #define EEPROM_FEEDER_LOSS 0x34
@@ -174,7 +175,7 @@ extern "C" {
 
     void Test_init(void);
 
-    /*  Serial port on the Tx_req pads (see Wiring.md): RA6 (/Tx_req)
+    /*  Serial port on the Tx_req pins, 9 and 10 (see Wiring.md): RA6 (/Tx_req)
         receives, RA7 (Tx_req) transmits. The tuner's Tx_req output is
         replaced by the "Tune" and "Tuned" events. */
 #define UART_IN_PIN  PORTAbits.RA6

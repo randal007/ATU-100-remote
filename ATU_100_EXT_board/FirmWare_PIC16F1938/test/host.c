@@ -359,7 +359,7 @@ static double step_time;
 
 static void next(void)
 {
-    step++;
+    step = (step == 12) ? 125 : step + 1;
     step_time = secs();
     mark = from_pic_len;
 }
@@ -491,6 +491,8 @@ static void scenario(void)
         if (waited(2)) {
             host_show_display("carrier on after tune");
             check_display(display_has(1, "SWR=1."), "display shows SWR");
+            check(strstr(from_pic, "\"Power\":10.") && strstr(from_pic, "\"Antenna\":") && strstr(from_pic, "\"Efficiency\":"),
+                  "status has transmitter power, antenna power and efficiency");
             press(2, 0.3); // bypass button
             next();
         }
@@ -585,10 +587,23 @@ static void scenario(void)
         if (got("\"Event\":\"Reset\"") && waited(1)) {
             check(relays_l() == 0 && relays_c() == 0, "short press of Tune resets the relays");
             printf("  antenna now 80-j60 ohm, SWR %.2f\n", swr_now());
+            check(!got("\"Event\":\"HighSWR\""), "no HighSWR alarm below the default 3.0");
             next();
-            press(0, 0.8); // long press: tune
+            send("{\"Raw\": true}\n{\"Set\": 55, \"Value\": 32}\n"); // alarm at SWR 2.0
         } else
             timeout(5, "reset by button");
+        break;
+
+    case 125:
+        if (got("\"Fwd\":") && got("\"Event\":\"HighSWR\"")) {
+            check(last_value("Fwd") > 2500 && last_value("Rev") > 1000, "raw detector readings");
+            check(eeprom[0x37] == 0x20, "alarm limit written");
+            check(1, "new alarm limit applies without a restart");
+            next();
+            step = 13;
+            press(0, 0.8); // long press: tune
+        } else
+            timeout(5, "raw readings and HighSWR");
         break;
 
     case 13:

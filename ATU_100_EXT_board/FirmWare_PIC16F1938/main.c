@@ -43,6 +43,9 @@ char g_b_display_onoff = 1;
 char g_b_tune_btn_released;
 
 bool new_state = false; // send a status message
+int g_i_Power_tx = 0;    // transmitter power, as shown after PWR=
+int e_i_swr_alarm;       // HighSWR event above this, SWR * 100; 0 = off
+char g_b_swr_alarm = 0;  // HighSWR sent, waiting for the SWR to come down
 
 /*  initial eeprom values*/
 __eeprom unsigned char initial_eeprom[256] = {
@@ -176,18 +179,6 @@ void main()
       g_b_Test_mode = 1;
       g_b_Auto_mode = 0;
    }
-   if (e_c_num_L_q == 5)
-      g_c_L_mult = 1;
-   else if (e_c_num_L_q == 6)
-      g_c_L_mult = 2;
-   else if (e_c_num_L_q == 7)
-      g_c_L_mult = 4;
-   if (e_c_num_C_q == 5)
-      g_c_C_mult = 1;
-   else if (e_c_num_C_q == 6)
-      g_c_C_mult = 2;
-   else if (e_c_num_C_q == 7)
-      g_c_C_mult = 4;
 
    Delay_ms(1500);
    CLRWDT();
@@ -480,9 +471,12 @@ void send_state(void)
    json_start();
    json_bool("Auto", g_b_Auto_mode);
    json_bool("Bypass", g_b_Bypas_mode);
-   if (g_i_Efficency > 0)
-      json_int("efficency", g_i_Efficency, 0);
-   json_int("Power", g_i_Power_report, e_c_b_P_High == 0);
+   json_int("Power", g_i_Power_tx, e_c_b_P_High == 0);
+   if (g_b_Loss_mode)
+   {
+      json_int("Antenna", g_i_Power_report, e_c_b_P_High == 0);
+      json_int("Efficiency", g_i_Efficency, 0);
+   }
    json_int("SWR", g_i_SWR_fixed, 2);
    json_str("Order", (g_c_SW == 1) ? "LC" : "CL");
    json_int("Capacitance", relay_sum(g_c_cap, e_i_Cap), 0);
@@ -520,6 +514,33 @@ static void get_eeprom(uint8_t address)
    json_start();
    send_eeprom(address);
    json_end();
+}
+
+// Detector voltages in mV, before the diode correction
+static void send_raw(void)
+{
+   unsigned int fwd = get_forward(), rev = get_reverse();
+   json_start();
+   json_int("Fwd", fwd * 3, 0); // the ADC sees a third, through 68k/34k
+   json_int("Rev", rev * 3, 0);
+   json_end();
+}
+
+// Settings written over serial take effect at once
+static void apply_settings(uint8_t cell)
+{
+   char auto_mode = g_b_Auto_mode;
+   cells_init();
+   if (cell != EEPROM_AUTOMATIC_MODE || g_b_Bypas_mode)
+      g_b_Auto_mode = auto_mode; // bypass keeps auto off until it ends
+   if (cell <= EEPROM_DISPLAY_OFFSET_LEFT)
+   { // display address, type or position: start the display again
+      Soft_I2C_Init();
+      led_init();
+      g_b_lcd_prep_short = 1;
+      lcd_prep();
+   }
+   show_mode();
 }
 
 // Single characters outside {} act like the buttons
@@ -584,10 +605,12 @@ void serial_proc(void)
             start_reset();
          else if (strcmp(json_rx_name, "Tune") == 0)
             start_tune();
+         else if (strcmp(json_rx_name, "Raw") == 0)
+            send_raw();
          else if (strcmp(json_rx_name, "Status") != 0)
             send_error();
          new_state = true;
-         if (strcmp(json_rx_name, "Status") != 0)
+         if (strcmp(json_rx_name, "Status") != 0 && strcmp(json_rx_name, "Raw") != 0)
             wake(); // like a button press
          break;
 
@@ -600,6 +623,7 @@ void serial_proc(void)
          {
             eeprom_write(cell, (unsigned char)json_rx_int);
             get_eeprom(cell);
+            apply_settings(cell);
          }
          else if (strcmp(json_rx_name, "RelayI") == 0)
          {
@@ -845,6 +869,7 @@ void show_pwr(int parm_Power, int parm_SWR)
    if (parm_Power != g_i_Power_old)
    {
       g_i_Power_old = parm_Power;
+      g_i_Power_tx = parm_Power;
       g_i_Power_report = parm_Power;
       new_state = true;
       //
@@ -891,6 +916,25 @@ void show_pwr(int parm_Power, int parm_SWR)
    return;
 }
 
+// HighSWR event as soon as one reading with power on it is above the
+// limit; again only after the SWR has dropped 0.1 below it or the power
+// has gone.
+static void swr_alarm(void)
+{
+   if (e_i_swr_alarm == 0)
+      return;
+   if (g_i_PWR >= 10 && g_i_SWR >= e_i_swr_alarm)
+   {
+      if (!g_b_swr_alarm)
+      {
+         g_b_swr_alarm = 1;
+         json_event("HighSWR");
+      }
+   }
+   else if (g_i_PWR < 10 || g_i_SWR < e_i_swr_alarm - 10)
+      g_b_swr_alarm = 0;
+}
+
 void lcd_pwr()
 {
    int p = 0;
@@ -913,6 +957,7 @@ void lcd_pwr()
       if (button_abort())
          return;
       get_pwr();
+      swr_alarm();
       if (g_i_PWR > p)
       {
          p = g_i_PWR;
@@ -1056,8 +1101,7 @@ void cells_init(void)
    // Cells init
    CLRWDT();
    e_c_ledtype = eeprom_read(EEPROM_DISPLAY_TYPE); // e_c_ledtype of display
-   if (eeprom_read(EEPROM_AUTOMATIC_MODE) == 1)
-      g_b_Auto_mode = 1;
+   g_b_Auto_mode = eeprom_read(EEPROM_AUTOMATIC_MODE) == 1;
    e_i_ms_Rel_Del = Bcd2Dec(eeprom_read(EEPROM_TIMEOUT_TIME));            // Relay's Delay
    e_i_tenths_SWR_Auto_delta = Bcd2Dec(eeprom_read(EEPROM_SWR_THRESHOLD)) * 10;    // e_i_tenths_SWR_Auto_delta
    e_i_watts_min_for_start = Bcd2Dec(eeprom_read(EEPROM_MIN_POWER)) * 10; // P_min_for_start
@@ -1071,6 +1115,18 @@ void cells_init(void)
    e_c_b_C_linear = eeprom_read(EEPROM_CAP_LINEAR_PITCH);
    e_c_b_D_correction = eeprom_read(EEPROM_ENABLE_NONLINEAR_DIODE);
    e_c_b_L_invert = eeprom_read(EEPROM_INVERSE_INDUCTANCE_RELAY);
+   if (e_c_num_L_q == 5)
+      g_c_L_mult = 1;
+   else if (e_c_num_L_q == 6)
+      g_c_L_mult = 2;
+   else if (e_c_num_L_q == 7)
+      g_c_L_mult = 4;
+   if (e_c_num_C_q == 5)
+      g_c_C_mult = 1;
+   else if (e_c_num_C_q == 6)
+      g_c_C_mult = 2;
+   else if (e_c_num_C_q == 7)
+      g_c_C_mult = 4;
    //
    CLRWDT();
    for (i = 0; i < 7; i++)
@@ -1089,6 +1145,8 @@ void cells_init(void)
    e_c_tenths_Fid_loss = Bcd2Dec(eeprom_read(EEPROM_FEEDER_LOSS));
    e_c_b_Relay_off = Bcd2Dec(eeprom_read(EEPROM_DISABLE_RELAYS));
    e_c_tune_mode = eeprom_read(EEPROM_TUNE_MODE);
+   i = eeprom_read(EEPROM_SWR_ALARM);
+   e_i_swr_alarm = (i == 0xff) ? 300 : Bcd2Dec(i) * 10; // unset: 3.0
    CLRWDT();
    return;
 }

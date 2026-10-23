@@ -7,14 +7,18 @@ which the original firmware used only to ask the transmitter for a carrier.
 
 ## Wiring
 
-| PIC16F1938 pin | Board label | Signal | To an Arduino Mega |
+| PIC16F1938 pin | Schematic name | Signal | To an Arduino Mega |
 |---|---|---|---|
 | 9, RA7  | `RA7 - Tx_req`  | serial out of the tuner | RX1, pin 19 |
 | 10, RA6 | `RA6 - /Tx_req` | serial into the tuner   | TX1, pin 18 |
 | 8 or 19 | GND             | ground                  | GND |
 
-The N7DDC schematic brings RA6 and RA7 out as the Tx_req pads; nothing else is
-connected to them. If a board has no pads, solder to pins 9 and 10 of the PIC.
+On N7DDC's own EXT PCB (checked against his gerber files) pins 9 and 10 are
+not routed anywhere: the "Tx_req" labels in the schematic are net names only.
+Solder fine wire (wire-wrap or enamelled) straight to the two pins, then
+anchor the wires with a dab of glue. Clone boards may differ.
+
+![PIC pins 9 and 10](docs/atu100_ra6_ra7.png)
 
 - **Fit a 10 kΩ pull-up from RA6 to +5 V.** Port A has no internal pull-ups.
   Without one, an unconnected or unpowered serial partner leaves the input
@@ -59,19 +63,33 @@ programming.
 
 The protocol is ukoda's (see README.md), with these differences:
 
-- Replies are one line each: `{"Auto":false,"Bypass":false,"Power":10.1,"SWR":1.18,"Order":"LC","Capacitance":470,"Inductance":670}`
+- Replies are one line each:
+  `{"Auto":false,"Bypass":false,"Power":10.0,"Antenna":7.2,"Efficiency":72,"SWR":1.21,"Order":"CL","Capacitance":320,"Inductance":0}`
+- `Power` is always the transmitter's power (as after PWR= on the display).
+  `Antenna` (after feeder and mismatch loss) and `Efficiency` (%) are added
+  while the display shows ANT/EFF, i.e. with cell 0x33 on and power present.
+- `{"Raw": true}` returns the detector voltages in mV before the diode
+  correction: `{"Fwd":2697,"Rev":1263}`.
 - Events: `Startup`, `Restart` (after a watchdog reset), `Tune`, `Tuned`,
-  `Reset`, `Overload`, `Error`.
+  `Reset`, `Overload`, `HighSWR`, `Error`.
+- `HighSWR` goes out on the first reading with power on it (1 W, or 10 W in
+  high power mode) at or above the limit in cell `0x37`, within a few ms. It
+  is sent again only after the SWR has dropped 0.1 below the limit or the
+  power has gone. The limit is BCD SWR x 10: `0x30` = 3.0 (also the default
+  when the cell is `0xFF`), `0x00` = off. It is not checked during a tune.
 - A status line goes out whenever something changes; `{"Status": true}` or
   `s` asks for one.
 - Any new JSON message cancels a tune that is still waiting for carrier
   (relays reset, as with the Tune button), then gets handled.
 - The buttons work as before, and serial commands act like button presses,
   including waking the display.
-- Eeprom cell `0x36` picks the tuning search: `0` is N7DDC's original,
-  anything else (the default, `0xFF` on a stock eeprom) is the log grid search.
-  `{"Set": 54, "Value": 0}` switches to the original from the next restart
-  (power cycle, or `{"x": true}`).
+- Settings written with `{"Set": cell, "Value": n}` take effect at once,
+  display settings included (the display restarts). N7DDC's manual lists the
+  cells; this firmware adds two:
+  - `0x36` tuning search: `0` is N7DDC's original, anything else (the
+    default, `0xFF` on a stock eeprom) the log grid search.
+    `{"Set": 54, "Value": 0}` switches to the original.
+  - `0x37` HighSWR limit, see above. `{"Set": 55, "Value": 37}` (0x25) = 2.5.
 
 ## Arduino Mega starting point
 

@@ -10,12 +10,17 @@
     - TUNING_PIN is high from the tuner's "Tune" event to its "Tuned"
       event: the Tx_req signal the tuner used to output itself. Use it to
       key a low power carrier and keep the amplifier in bypass.
+    - atuHighSwr is set by the tuner's "HighSWR" event (sent within a few
+      ms of the SWR passing the limit in eeprom cell 0x37) and cleared
+      when a status line shows the SWR back under 2.
 */
 
 const long ATU_BAUD = 4800;
 const int TUNING_PIN = 22;
 
 float atuSwr = 0, atuPower = 0;
+long atuFwdMv = 0, atuRevMv = 0;     // from atuRaw()
+bool atuHighSwr = false;
 long atuInductance = 0, atuCapacitance = 0; // nH, pF
 bool atuTuning = false, atuBypass = false, atuAuto = false;
 
@@ -47,6 +52,11 @@ void atuLine()
   } else if (strstr(line, "\"Event\":\"Tuned\"") || strstr(line, "\"Event\":\"Reset\"")) {
     atuTuning = false;
     digitalWrite(TUNING_PIN, LOW);
+  } else if (strstr(line, "\"Event\":\"HighSWR\"")) {
+    atuHighSwr = true; // e.g. drop the amplifier to bypass here
+  } else if (strstr(line, "\"Fwd\":")) {
+    atuFwdMv = (long)field("Fwd");
+    atuRevMv = (long)field("Rev");
   } else if (strstr(line, "\"SWR\":")) {
     atuSwr = field("SWR");
     atuPower = field("Power");
@@ -54,6 +64,8 @@ void atuLine()
     atuCapacitance = (long)field("Capacitance");
     atuBypass = flag("Bypass", atuBypass);
     atuAuto = flag("Auto", atuAuto);
+    if (atuSwr < 2.0)
+      atuHighSwr = false;
   }
 }
 
@@ -61,6 +73,7 @@ void atuLine()
 void atuTune() { Serial1.print("{\"Tune\":true}\n"); }
 void atuReset() { Serial1.print("{\"Reset\":true}\n"); }
 void atuStatus() { Serial1.print("{\"Status\":true}\n"); }
+void atuRaw() { Serial1.print("{\"Raw\":true}\n"); }
 void atuSetBypass(bool on) { Serial1.print(on ? "{\"Bypass\":true}\n" : "{\"Bypass\":false}\n"); }
 
 // Relays directly: inductors and capacitors as bit sets, C on the output side if cOut

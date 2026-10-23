@@ -56,8 +56,8 @@ You will need:
 	1. Flash the new firmware using: `pk2cmd -B/your/path/to/pk2cmd/pk2cmd -PPIC16F1938 -FATU-100_remote_PIC16F1938_XXXXXXXX_YYYY.hex -E -M -J -R`
 3. Test the software is running:
 	1. Disconnect the programmer and power off.
-	2. Wire the TTL serial TXD data line from the PC to the `RA6 - /Tx_req` pad (PIC pin 10), with a 10 kΩ pull-up to +5 V. See [Wiring.md](Wiring.md).
-	3. Wire the TTL serial RXD data line to the PC to the `RA7 - Tx_req` pad (PIC pin 9).
+	2. Wire the TTL serial TXD data line from the PC to PIC pin 10 (RA6, `/Tx_req` in the schematic), with a 10 kΩ pull-up to +5 V. See [Wiring.md](Wiring.md).
+	3. Wire the TTL serial RXD data line to the PC to PIC pin 9 (RA7, `Tx_req` in the schematic).
 	4. Connect the serial adaptor or cable.  In this example we are assuming it is `/dev/ttyUSB0`
 	4. Power on the ATU-100.
 	5. Goto the `python` directory in this project.
