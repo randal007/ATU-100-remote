@@ -275,6 +275,12 @@ fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits)
     if app.esp.present == Some(true) {
         let start = Line::from(left.clone()).width() as u16 + 2;
         let web = match app.esp.web_url() {
+            Some(url) if app.web_reach == Some(false) => vec![
+                Span::raw("  "),
+                Span::styled("● ", Style::new().fg(YELLOW)),
+                Span::styled("web server up, not reachable from here ", Style::new().fg(MAIN_FG)),
+                Span::styled(url.trim_start_matches("http://").trim_end_matches('/').to_string(), Style::new().fg(GRAPH_TEXT)),
+            ],
             Some(url) => vec![
                 Span::raw("  "),
                 Span::styled("● ", Style::new().fg(GREEN)),
@@ -358,7 +364,13 @@ fn draw_swr(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
     }
     let value = if t.swr == 0.0 { " -.--".to_string() } else { format!(" {:.2}", t.swr) };
     let mut line = vec![Span::styled(value, Style::new().fg(swr_color(t.swr)).add_modifier(Modifier::BOLD))];
-    line.push(Span::styled(if t.swr == 0.0 { "  no power" } else { "" }, Style::new().fg(GRAPH_TEXT)));
+    // N7DDC's firmware measures the SWR only from 1 W up
+    let note = match (t.swr == 0.0, t.power > 0.0) {
+        (true, true) => "  under 1 W: not measured",
+        (true, false) => "  no power",
+        _ => "",
+    };
+    line.push(Span::styled(note, Style::new().fg(GRAPH_TEXT)));
     let row = Rect { height: 1, ..inner };
     f.render_widget(Paragraph::new(Line::from(line)), row);
     let limit = match t.alarm() {

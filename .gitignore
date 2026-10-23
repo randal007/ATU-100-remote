@@ -3,3 +3,5 @@ ATU-100-remote.code-workspace
 python/__pycache__
 *.backup
 
+esp32/build/
+esp32/*/build/

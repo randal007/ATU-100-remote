@@ -31,6 +31,26 @@ pub struct App {
     sim: Option<connect::Simulator>,       // started from the connect screen
     pub winding: Option<WindingDialog>,    // the detector winding box, while open
     switch_to: Option<String>,             // a port to move to
+    /// Whether this computer reaches the bridge's web page: None until checked
+    pub web_reach: Option<bool>,
+    web_check: Option<std::sync::mpsc::Receiver<bool>>,
+}
+
+/// Try the web page's port from here, in the background
+fn check_web(url: &str) -> std::sync::mpsc::Receiver<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let addr = url.trim_start_matches("http://").trim_end_matches('/').to_string();
+    let addr = if addr.contains(':') { addr } else { format!("{addr}:80") };
+    std::thread::spawn(move || {
+        use std::net::ToSocketAddrs;
+        let ok = addr
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut a| a.next())
+            .is_some_and(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(2)).is_ok());
+        let _ = tx.send(ok);
+    });
+    rx
 }
 
 pub struct WindingDialog {
@@ -199,7 +219,7 @@ fn main() {
         return;
     }
     let port = arg.or_else(|| std::env::var("ATU100_PORT").ok());
-    let mut app = App { port: String::new(), link_error: None, detector: false, started: Instant::now(), esp: Esp::default(), settings: None, connect: None, sim: None, winding: None, switch_to: None };
+    let mut app = App { port: String::new(), link_error: None, detector: false, started: Instant::now(), esp: Esp::default(), settings: None, connect: None, sim: None, winding: None, switch_to: None, web_reach: None, web_check: None };
     let mut link = None;
     match port {
         Some(port) => match Link::open(&port) {
@@ -241,6 +261,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
     let mut last_raw = Instant::now();
     let mut last_info = Instant::now();
     let mut last_retry = Instant::now();
+    let mut last_web = Instant::now() - Duration::from_secs(60);
     let mut hits = ui::Hits::default();
     loop {
         while let Some(msg) = link.as_ref().and_then(|l| l.rx.try_recv().ok()) {
@@ -335,6 +356,21 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
             c.poll();
         }
         app.esp.check_probe();
+        // Can this computer reach the bridge's web page?
+        if let Some(rx) = &app.web_check {
+            if let Ok(ok) = rx.try_recv() {
+                app.web_reach = Some(ok);
+                app.web_check = None;
+            }
+        }
+        match app.esp.web_url() {
+            Some(url) if app.web_check.is_none() && last_web.elapsed() >= Duration::from_secs(10) => {
+                last_web = Instant::now();
+                app.web_check = Some(check_web(&url));
+            }
+            None => app.web_reach = None,
+            _ => {}
+        }
         // While the settings are open, keep the bridge's Wi-Fi state fresh
         let info_every = if app.settings.is_some() { 2 } else { 10 }; // the header shows the web page state
         if app.esp.present == Some(true) && last_info.elapsed() >= Duration::from_secs(info_every) && out.idle() {

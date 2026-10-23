@@ -312,7 +312,7 @@ class atu100remote(object):
             self.update_var('Detector', f'{atu.fwd_mv}/{atu.rev_mv}')
         if 'Event' in rxmsg:
             event = rxmsg['Event']
-            self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'Overload', 'Error') else C_GOOD_DATA)
+            self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'HighPower', 'Overload', 'Error') else C_GOOD_DATA)
             if event == 'Tune':
                 self.update_var('Tune', 'Tuning', C_WARN_DATA)
             elif event == 'Tuned':

@@ -673,6 +673,10 @@ static void scenario(void)
         if (got("\"Fwd\":") && got("\"Event\":\"HighSWR\"")) {
             check(last_value("Fwd") > 2500 && last_value("Rev") > 1000, "raw detector readings");
             check(eeprom[0x37] == 0x20, "alarm limit written");
+            {
+                const char *e = strstr(from_pic + mark, "\"Event\":\"HighSWR\",\"SWR\":");
+                check(e && atof(e + 24) >= 2.0, "HighSWR event carries the reading that set it off");
+            }
             check(1, "new alarm limit applies without a restart");
             next();
             step = 13;
@@ -709,6 +713,40 @@ static void scenario(void)
         break;
 
     case 16:
+        if (waited(1)) {
+            next();
+            send("{\"Auto\": true}\n");
+        }
+        break;
+
+    case 17:
+        if (got("\"Auto\":true") && waited(1)) {
+            next();
+            send("{\"RelayI\": 0}\n"); // relays set by hand, far from the match
+            send("{\"RelayC\": 0}\n");
+        } else
+            timeout(3, "auto on");
+        break;
+
+    case 18:
+        if (got_status_after("\"Event\":\"Tuned\"")) {
+            const char *tune = strstr(from_pic + mark, "{\"Event\":\"Tune\"}");
+            const char *alarm = strstr(from_pic + mark, "\"Event\":\"HighSWR\"");
+            // the SWR in the last status line before the Tune event
+            const char *st = NULL;
+            for (const char *p = from_pic + mark; (p = strstr(p, "{\"Auto\":")) != NULL && p < tune; p++)
+                st = strstr(p, "\"SWR\":");
+            check(alarm && alarm < tune, "auto mode: HighSWR before the auto tune");
+            snprintf(what, sizeof what, "auto mode: the high SWR is reported before the tune starts (%.2f)", st ? atof(st + 6) : 0);
+            check(st && atof(st + 6) >= 2.0, what);
+            snprintf(what, sizeof what, "auto tune: model SWR %.2f", swr_now());
+            check(swr_now() < 1.5, what);
+            next();
+        } else
+            timeout(60, "auto tune");
+        break;
+
+    case 19:
         if (waited(1))
             finish();
         break;

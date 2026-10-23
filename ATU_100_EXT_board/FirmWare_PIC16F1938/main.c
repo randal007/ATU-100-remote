@@ -76,6 +76,7 @@ __eeprom unsigned char initial_eeprom[256] = {
 
 void serial_proc(void);
 void send_state(void);
+static void quick_swr(void);
 
 //***************** Display helpers *****************
 
@@ -326,6 +327,7 @@ static void toggle_bypass_mode(void)
    set_ind(g_c_ind);
    set_cap(g_c_cap);
    set_sw(g_c_SW);
+   quick_swr();
    if (g_b_Loss_mode == 0)
       lcd_ind();
    show_mode();
@@ -637,6 +639,7 @@ void serial_proc(void)
             g_c_ind = (char)json_rx_int;
             set_ind(g_c_ind);
             eeprom_write(EEPROM_LAST_IND, g_c_ind);
+            quick_swr();
             lcd_ind();
          }
          else if (strcmp(json_rx_name, "RelayC") == 0)
@@ -647,6 +650,7 @@ void serial_proc(void)
             set_sw(g_c_SW);
             eeprom_write(EEPROM_LAST_CAP, g_c_cap);
             eeprom_write(EEPROM_LAST_SW, g_c_SW);
+            quick_swr();
             lcd_ind();
          }
          else
@@ -767,6 +771,7 @@ void show_reset()
 // carrier from the first until the second.
 void tune_btn_push()
 {
+   send_state(); // what made an auto tune start: the high SWR, before the tune
    json_event("Tune");
    Delay_ms(250); // time for the transmitter to start
    disp(2, 16 + 12 * 4, 1, 4, "TUNE", 4);
@@ -1003,11 +1008,28 @@ static void swr_alarm(void)
       if (!g_b_swr_alarm)
       {
          g_b_swr_alarm = 1;
-         json_event("HighSWR");
+         json_start(); // with the reading that set it off
+         json_str("Event", "HighSWR");
+         json_int("SWR", g_i_SWR, 2);
+         json_end();
       }
    }
    else if (g_i_PWR < 10 || g_i_SWR < e_i_swr_alarm - 10)
       g_b_swr_alarm = 0;
+}
+
+// One reading straight after the relays changed, so the status that
+// follows carries the SWR of the new relays, not the old ones. No power
+// in that moment (a gap in speech) gives 0.00 until the next measurement.
+static void quick_swr(void)
+{
+   int swr;
+   Delay_ms(e_i_ms_Rel_Del); // the relays settle
+   get_pwr();
+   swr = g_i_PWR >= 10 ? g_i_SWR : 0;
+   lcd_swr(swr);
+   if (swr != 0)
+      show_pwr(g_i_Power, swr); // antenna power and efficiency for the new SWR
 }
 
 // More power than the board or the detector winding is good for: the
@@ -1021,7 +1043,10 @@ static void power_alarm(void)
       if (!g_b_power_alarm)
       {
          g_b_power_alarm = 1;
-         json_event("HighPower");
+         json_start();
+         json_str("Event", "HighPower");
+         json_int("Power", g_i_PWR, 1);
+         json_end();
       }
    }
    else if (g_i_PWR < e_i_power_alarm - e_i_power_alarm / 10)

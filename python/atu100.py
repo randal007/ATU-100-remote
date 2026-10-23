@@ -342,7 +342,7 @@ class atu100(object):
                 self.bypass = value
             elif name == 'Power':
                 self.power = value
-                if 'Antenna' not in rxmsg:  # only sent while the tuner shows it
+                if 'Antenna' not in rxmsg and 'Order' in rxmsg:  # only sent while the tuner shows it (status lines)
                     self.antenna = None
                     self.efficiency = None
             elif name == 'Antenna':

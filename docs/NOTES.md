@@ -59,9 +59,10 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 1. Back up the tuner's EEPROM, flash with the PICkit 3 (MPLAB IPE 6.20 or
    older), check display/buttons/serial, compare the two tuning searches
    on the real antennas (cell 0x36).
-2. ESP32 bridge firmware (Arduino core: USB CDC, UART to the tuner at
-   4800, TCP 7000, UDP 7001, Preferences, mDNS, hotspot + setup page),
-   following test/esp32_sim.py; mind the native USB reset on port open.
+2. ESP32 bridge firmware: written, compiles; try it when the board
+   arrives (README "ESP32 bridge"). Check: opening the native USB port
+   does not reset it; Wi-Fi join/hotspot/setup page; atutop over USB and
+   Wi-Fi; Mega pass-through.
 3. Not done yet: a screenshot of the new screens for the README.
 4. **Power range follows the detector winding** (asked 2026-10-23, research
    N7DDC's 3.2 manual in docs/ first). His understanding: minimum tune
@@ -120,6 +121,23 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    `WebPort`), click opens it with xdg-open. The simulated bridge serves a
    stand-in page; the real ESP32 page is still to write. The simulated
    bridge takes the next free port if 7000 is in use.
+   **Bugs he found in the simulator (2026-10-23), fixed, all real:**
+   (1) HighSWR in atutop's log showed the old SWR (1.21): the event had no
+   value; it now carries `"SWR"` (HighPower carries `"Power"`) and atutop
+   handles Event after the other fields. (2) "Tunes before it shows the
+   high SWR": button_proc() ran the auto tune before send_state(), so the
+   status with the high SWR never went out; tune_btn_push() now sends it
+   first. Also the status straight after RelayI/RelayC/bypass carried the
+   old relays' SWR (and antenna/efficiency): quick_swr() takes one reading
+   first. Simulator steps 16-19 check an auto tune after a relay change
+   (verified to fail on the old firmware). (3) "No power" next to 0.6 W:
+   the firmware reports SWR 0.00 below 1 W on purpose (N7DDC); atutop now
+   says "under 1 W: not measured".
+   **ESP32 bridge firmware written** (esp32/atu100_bridge, compiles for
+   esp32:esp32:XIAO_ESP32S3_Plus with arduino-cli 1.5.1 in
+   ~/opt/arduino-cli, ArduinoJson 7.4.3; 45% flash). Untested on hardware.
+   Web indicator: atutop also checks from the PC that the page is
+   reachable (yellow "not reachable from here" otherwise).
 5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
    the radio end (CL) or the antenna end (LC); C goes on the high
    impedance side; every tune picks it; saved in cell FD. Band memories

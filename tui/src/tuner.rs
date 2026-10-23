@@ -136,8 +136,8 @@ impl Tuner {
                         }
                     }
                     self.have_status = true;
-                    if !msg.contains_key("Antenna") {
-                        self.antenna = None; // only sent while the tuner shows it
+                    if !msg.contains_key("Antenna") && msg.contains_key("Order") {
+                        self.antenna = None; // only sent while the tuner shows it (a status line, not an event)
                         self.efficiency = None;
                     }
                 }
@@ -167,7 +167,7 @@ impl Tuner {
                 "Fwd" => self.fwd_mv = value.as_i64(),
                 "Rev" => self.rev_mv = value.as_i64(),
                 "Build" => self.build = value.as_str().map(String::from),
-                "Event" => self.event(value.as_str().unwrap_or("?")),
+                "Event" => {} // below, once the values that came with it are in
                 _ => {
                     // EEPROM cells: {"37":"30"}, or all 256 in a dump
                     if let (Ok(cell), Some(Ok(data))) = (
@@ -184,6 +184,9 @@ impl Tuner {
         }
         if cells {
             self.cells_changed(msg.len() > 200);
+        }
+        if let Some(event) = msg.get("Event") {
+            self.event(event.as_str().unwrap_or("?"));
         }
     }
 

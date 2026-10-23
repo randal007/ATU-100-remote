@@ -187,7 +187,7 @@ the display-off timer (cell 32).
 | `Power` | transmitter power in W, as after PWR= on the display: 0.1 W steps, or 1 W steps in high power mode (cell 30) |
 | `Antenna` | power reaching the antenna after feeder loss (cell 34) and mismatch, W. Only while the display shows ANT/EFF: cell 33 on and power present |
 | `Efficiency` | percent, with `Antenna` |
-| `SWR` | two decimals; 0.00 with no power |
+| `SWR` | two decimals; 0.00 under 1 W (N7DDC's firmware does not measure the SWR below 1 W). Measured again straight after relays change, so a status after `RelayI`, `RelayC` or bypass carries the new SWR |
 | `Order` | `LC`: capacitors on the antenna side; `CL`: on the transmitter side |
 | `Capacitance`, `Inductance` | of the relays that are on, pF and nH |
 
@@ -197,11 +197,11 @@ the display-off timer (cell 32).
 |---|---|
 | `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.0, Oct 23 2026"}`: the firmware's revision and build date, shown at the top of atutop |
 | `Restart` | the watchdog restarted the tuner |
-| `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal |
+| `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal. Any waiting status goes out first, so after an auto tune starts the high SWR that started it has already been reported |
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
 | `Reset` | the relays were reset (button, command, or a tune given up) |
-| `HighSWR` | SWR at or above the limit in cell 37 with power present; sent within a few ms, again only after the SWR has dropped 0.1 below the limit or the power has gone. Not checked while tuning |
-| `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). Sent again only after the power has dropped 10% |
+| `HighSWR` | SWR at or above the limit in cell 37 with power present, with the reading: `{"Event":"HighSWR","SWR":2.76}`; sent within a few ms, again only after the SWR has dropped 0.1 below the limit or the power has gone. Not checked while tuning |
+| `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). With the reading: `{"Event":"HighPower","Power":120.4}`. Sent again only after the power has dropped 10% |
 | `Overload` | more power than the detector can measure |
 | `Error` | a command the tuner did not understand |
 | `Busy` | a command that arrived while a tune was waiting for carrier, and was not done |
@@ -501,9 +501,45 @@ on Serial1:
 - has functions for tune, reset, bypass, status, detector readings and
   setting relays.
 
-An ESP32 bridge (USB and Wi-Fi) is being written; its messages are
-specified by the simulator, `test/esp32_sim.py`, and in
-[docs/NOTES.md](docs/NOTES.md).
+## ESP32 bridge
+
+`esp32/atu100_bridge/atu100_bridge.ino`, for a **Seeed XIAO ESP32S3 Plus**.
+It sits between the tuner and everything else:
+
+- **USB**: everything passes between the USB port and the tuner, so atutop
+  and the Python tools work as with a USB serial adapter.
+- **Wi-Fi**: the same on TCP port 7000 (`socket://atu100.local:7000`, two
+  clients at a time), a web page on port 80 (SWR, power, L and C, Tune,
+  Reset, Bypass, Auto), and an answer on UDP port 7001 so atutop's connect
+  screen finds it.
+- **Mega**: a second serial port, as if the Mega were wired to the tuner;
+  the Mega sketch needs no change. Only JSON lines from the Mega reach the
+  tuner, so a loose wire cannot send the tuner's one-letter commands.
+- Lines are passed whole: messages from different sides never mix.
+- Its own messages carry an `"ESP32"` field and never reach the tuner (the
+  tuner ignores them, so atutop's probe is harmless without a bridge):
+  `Info`, `Scan`, `WiFi`, `Forget`, answered with `Info`, `Net` lines and
+  `Scan`, `OK` or `Error`. `test/esp32_sim.py` does the same on a PC.
+- **Wi-Fi settings change over USB only** (atutop's settings), or from the
+  setup page at `http://192.168.4.1/setup` on the bridge's own hotspot
+  **ATU100-setup** (password `atu100setup`), which comes up when no network
+  is saved or the saved one cannot be joined for 20 seconds. It keeps trying
+  the network every 30 seconds and closes the hotspot half a minute after
+  joining. IP address from the router, or fixed.
+
+| XIAO pin | To | Note |
+|---|---|---|
+| D7 (GPIO44), RX | tuner RA7, PIC pin 9 | through a 2.2 kΩ / 3.3 kΩ divider: the tuner sends 5 V |
+| D6 (GPIO43), TX | tuner RA6, PIC pin 10 | 10 kΩ pull-up to 3.3 V at the PIC |
+| D8 (GPIO7), RX | Mega TX1, pin 18 | through a 2.2 kΩ / 3.3 kΩ divider |
+| D9 (GPIO8), TX | Mega RX1, pin 19 | |
+| 5V, GND | a 7805 from the tuner's 12 V; common ground | not the tuner's 78L05 |
+
+Build: `arduino-cli compile -b esp32:esp32:XIAO_ESP32S3_Plus
+esp32/atu100_bridge` with the esp32 boards package and the ArduinoJson
+library (`arduino-cli lib install ArduinoJson`). Upload over USB with
+`arduino-cli upload -b esp32:esp32:XIAO_ESP32S3_Plus -p /dev/ttyACM0
+esp32/atu100_bridge`. **Not yet tried on the board.**
 
 ## Building
 
@@ -512,7 +548,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15245 of 16384 program words (93%) and 662 of 1024
+The firmware uses 15376 of 16384 program words (94%) and 662 of 1024
 bytes of RAM.
 
 ## Testing without a tuner
@@ -522,11 +558,12 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
 - `./run.sh` compiles the firmware for the PC with a stand-in for the PIC's
   registers and runs it against a simulated Arduino on the serial line
   (exact clock and 2% off either way), the buttons, an RF source and an
-  antenna behind the relay network. It makes 29 checks for each of three
-  display types (26 with the LED, which has no text to check): tuning by
-  serial and button, reset, bypass, auto, relays,
-  messages while a tune waits for carrier, the EEPROM dump with a command arriving during it,
-  power fields, detector readings, the HighSWR alarm, live settings, the
+  antenna behind the relay network. It makes 37 checks for each of three
+  display types (34 with the LED, which has no text to check): tuning by
+  serial and button, reset, bypass, auto, relays, messages while a tune
+  waits for carrier, the EEPROM dump with a command arriving during it,
+  power fields, detector readings, the HighSWR and HighPower alarms, an
+  auto tune reporting the high SWR before it starts, live settings, the
   watchdog and serial framing. Then it compares the two tuning searches
   over about 1100 antenna loads.
 - `./python_tools.sh` runs the simulated tuner on a pseudo terminal in real
