@@ -55,7 +55,9 @@ programming.
    flash needs a programmer that supplies about 9 V on MCLR (any PICkit does).
    This firmware turns low-voltage programming on, so later updates work from
    plain 5 V programmers too.
-3. Build with `ATU_100_EXT_board/FirmWare_PIC16F1938/build.sh` (XC8 and the
+3. A PICkit 3 needs MPLAB X / MPLAB IPE **v6.20 or older** (Microchip's
+   archive page); v6.25 dropped the PICkit 3.
+4. Build with `ATU_100_EXT_board/FirmWare_PIC16F1938/build.sh` (XC8 and the
    PIC12-16F1xxx device pack; paths at the top of the script) and program
    `build/cli/atu100.hex`.
 
