@@ -63,6 +63,21 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    4800, TCP 7000, UDP 7001, Preferences, mDNS, hotspot + setup page),
    following test/esp32_sim.py; mind the native USB reset on port open.
 3. Not done yet: a screenshot of the new screens for the README.
+4. **Power range follows the detector winding** (asked 2026-10-23, research
+   N7DDC's 3.2 manual in docs/ first). His understanding: minimum tune
+   power ("Tunes from", cell 05) and the tandem match winding (cell 31,
+   turns ratio) go together: wound for ~1 W tuning the tuner tops out at
+   about 40 W; wound for 5 W it handles 0-100 W. Wanted in atutop: power
+   scale 0-40 W or 0-100 W to match, an over-power alarm above the limit,
+   and changing the setting made deliberate: a prompt asking how the
+   detector is wound, warning that the 1 W winding limits power to 40 W
+   (the detector overloads). Check the facts against the manual and
+   correct him where they differ.
+5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
+   the radio end (CL) or the antenna end (LC); C goes on the high
+   impedance side; every tune picks it; saved in cell FD. Band memories
+   must restore it along with L and C. Maybe add a one-line hint in
+   atutop ("C at antenna: load above 50 ohm").
 
 ### Trying atutop without the tuner
 
