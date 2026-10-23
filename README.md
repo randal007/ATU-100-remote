@@ -356,9 +356,11 @@ match (5 W or 1 W). Click **Tunes from** to switch the minimum tuning
 power (cell 05) between 5 W and 1 W; other values can be set with
 `atu100.py -c s -a 05 -d NN`.
 
-**Web server:** with an ESP32 bridge on Wi-Fi the top line shows
-"● web server online" and its address; click it to open the bridge's page
-in the browser.
+**Web server:** with an ESP32 bridge the top line shows "● web server
+online" and the address this computer reaches it at (home network or the
+bridge's hotspot; checked every 10 seconds), or in yellow "not reachable
+from here" when this computer is on neither. Click it to open the page in
+the browser.
 
 It works from 80×24 up and takes the port for itself, so it and the Python
 tools cannot talk to the tuner at the same time. Commands go out one at a
@@ -520,12 +522,21 @@ It sits between the tuner and everything else:
   tuner ignores them, so atutop's probe is harmless without a bridge):
   `Info`, `Scan`, `WiFi`, `Forget`, answered with `Info`, `Net` lines and
   `Scan`, `OK` or `Error`. `test/esp32_sim.py` does the same on a PC.
+- **Its own hotspot**, **ATU100-setup**, password **hamradio**, address
+  **192.168.73.1**: comes up when no network is saved or the saved one
+  cannot be joined for 20 seconds, and everything works on it (the web
+  page, port 7000, atutop's search, `atu100.local`), so a laptop or phone
+  can use the tuner off-grid with no other network. Pick a network from
+  its setup page, `http://192.168.73.1/setup`. Without anyone on the
+  hotspot it tries the saved network every 30 seconds; it closes the
+  hotspot half a minute after joining, unless it is set to **always on**
+  (atutop's settings, over USB).
+- The hotspot and the home network share one radio, so the hotspot uses
+  the home network's channel: when the bridge joins a network, anything on
+  the hotspot drops for a moment and reconnects. That is why it does not
+  try the network while someone is on the hotspot.
 - **Wi-Fi settings change over USB only** (atutop's settings), or from the
-  setup page at `http://192.168.4.1/setup` on the bridge's own hotspot
-  **ATU100-setup** (password `atu100setup`), which comes up when no network
-  is saved or the saved one cannot be joined for 20 seconds. It keeps trying
-  the network every 30 seconds and closes the hotspot half a minute after
-  joining. IP address from the router, or fixed.
+  hotspot's setup page. IP address from the router, or fixed.
 
 | XIAO pin | To | Note |
 |---|---|---|

@@ -26,6 +26,8 @@ pub struct Esp {
     pub port: u16,
     pub hotspot: bool,
     pub hotspot_name: String,
+    pub hotspot_ip: String,
+    pub hotspot_always: bool,
     pub web: bool, // its web page is being served
     pub web_port: u16,
     pub static_ip: String, // empty: the router gives the address (DHCP)
@@ -78,6 +80,8 @@ impl Esp {
                 self.port = i("Port") as u16;
                 self.hotspot = msg.get("Hotspot").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.hotspot_name = s("HotspotName");
+                self.hotspot_ip = s("HotspotIP");
+                self.hotspot_always = msg.get("HotspotAlways").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.web = msg.get("Web").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.web_port = i("WebPort") as u16;
                 self.static_ip = s("StaticIP");
@@ -109,12 +113,21 @@ impl Esp {
         true
     }
 
-    /// The bridge's web page, when it is up
-    pub fn web_url(&self) -> Option<String> {
-        (self.web && self.wifi == "Connected" && !self.ip.is_empty()).then(|| match self.web_port {
-            0 | 80 => format!("http://{}/", self.ip),
-            p => format!("http://{}:{p}/", self.ip),
-        })
+    /// Where the bridge's web page is served: its address on the home
+    /// network, and on its own hotspot
+    pub fn web_urls(&self) -> Vec<String> {
+        let url = |ip: &str| match self.web_port {
+            0 | 80 => format!("http://{ip}/"),
+            p => format!("http://{ip}:{p}/"),
+        };
+        let mut list = vec![];
+        if self.web && self.wifi == "Connected" && !self.ip.is_empty() {
+            list.push(url(&self.ip));
+        }
+        if self.web && self.hotspot && !self.hotspot_ip.is_empty() {
+            list.push(url(&self.hotspot_ip));
+        }
+        list
     }
 
     /// Where to reach the bridge over Wi-Fi, once it is on the network

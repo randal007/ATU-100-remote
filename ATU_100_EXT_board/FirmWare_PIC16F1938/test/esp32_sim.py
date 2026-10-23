@@ -40,6 +40,7 @@ PORT = 7000
 FIND_PORT = 7001
 HOST = 'atu100.local'
 HOTSPOT = 'ATU100-setup'
+HOTSPOT_IP = '192.168.73.1'  # pretend: nothing listens there on this PC
 NETWORKS = [  # SSID, RSSI, password (None = open)
     ('VE7NHW-shack', -47, 'hamradio'),
     ('TELUS4471', -71, '?'),
@@ -129,6 +130,7 @@ class Bridge:
         self.state = 'Off'         # Off, Connecting, Connected, Failed
         self.since = time.time()
         self.hotspot = True        # nothing saved yet: hotspot for setup
+        self.hotspot_always = False
         self.scan_due = []         # clients waiting for a scan
 
     # Wi-Fi as the real firmware does it, with pretend timings
@@ -138,7 +140,8 @@ class Bridge:
             ssid, password = self.saved
             net = next((n for n in NETWORKS if n[0] == ssid), None)
             if net and (net[2] is None or net[2] == password):
-                self.state, self.since, self.hotspot = 'Connected', now, False
+                self.state, self.since = 'Connected', now
+                self.hotspot = self.hotspot_always
                 print(f'Wi-Fi: connected to {ssid}', flush=True)
             elif now - self.since > 6:
                 self.state, self.since, self.hotspot = 'Failed', now, True
@@ -189,8 +192,9 @@ class Bridge:
             'IP': '127.0.0.1' if connected else '',
             'RSSI': next((n[1] for n in NETWORKS if self.saved and n[0] == self.saved[0]), 0) if connected else 0,
             'Host': HOST, 'Port': self.port,
-            'Web': connected, 'WebPort': self.web_port,
+            'Web': connected or self.hotspot, 'WebPort': self.web_port,
             'Hotspot': self.hotspot, 'HotspotName': HOTSPOT,
+            'HotspotIP': HOTSPOT_IP if self.hotspot else '', 'HotspotAlways': self.hotspot_always,
             'StaticIP': self.static[0] if self.static else '',
             'Gateway': self.static[1] if self.static else '',
             'Mask': self.static[2] if self.static else '',
@@ -204,7 +208,7 @@ class Bridge:
             self.reply(client, dict(self.info(), Client=client.name))
         elif cmd == 'Scan':
             self.scan_due.append((client, time.time() + 1.5))
-        elif cmd in ('WiFi', 'Forget') and client is not self.usb:
+        elif cmd in ('WiFi', 'Forget', 'Hotspot') and client is not self.usb:
             self.reply(client, {'ESP32': 'Error', 'Text': 'Wi-Fi settings change over USB only'})
         elif cmd == 'WiFi':
             ssid = str(msg.get('SSID', ''))
@@ -225,6 +229,14 @@ class Bridge:
             self.saved = (ssid, password)
             self.state, self.since = 'Connecting', time.time()
             self.reply(client, {'ESP32': 'OK', 'Text': f'saved, joining {ssid}'})
+        elif cmd == 'Hotspot':
+            self.hotspot_always = bool(msg.get('Always'))
+            if self.hotspot_always:
+                self.hotspot = True
+            elif self.state == 'Connected':
+                self.hotspot = False
+            self.reply(client, {'ESP32': 'OK', 'Text': 'hotspot always on' if self.hotspot_always
+                                else 'hotspot only when there is no network'})
         elif cmd == 'Forget':
             self.saved, self.state, self.hotspot, self.static = None, 'Off', True, None
             self.reply(client, {'ESP32': 'OK', 'Text': 'Wi-Fi forgotten, hotspot on'})

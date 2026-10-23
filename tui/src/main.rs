@@ -31,24 +31,27 @@ pub struct App {
     sim: Option<connect::Simulator>,       // started from the connect screen
     pub winding: Option<WindingDialog>,    // the detector winding box, while open
     switch_to: Option<String>,             // a port to move to
-    /// Whether this computer reaches the bridge's web page: None until checked
-    pub web_reach: Option<bool>,
-    web_check: Option<std::sync::mpsc::Receiver<bool>>,
+    /// Which of the bridge's web addresses this computer reaches: None
+    /// until checked, Some(None) when none
+    pub web_reach: Option<Option<String>>,
+    web_check: Option<std::sync::mpsc::Receiver<Option<String>>>,
 }
 
-/// Try the web page's port from here, in the background
-fn check_web(url: &str) -> std::sync::mpsc::Receiver<bool> {
+/// Try the web page's addresses from here, in the background; the first
+/// that answers
+fn check_web(urls: Vec<String>) -> std::sync::mpsc::Receiver<Option<String>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let addr = url.trim_start_matches("http://").trim_end_matches('/').to_string();
-    let addr = if addr.contains(':') { addr } else { format!("{addr}:80") };
     std::thread::spawn(move || {
         use std::net::ToSocketAddrs;
-        let ok = addr
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut a| a.next())
-            .is_some_and(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(2)).is_ok());
-        let _ = tx.send(ok);
+        let reach = urls.into_iter().find(|url| {
+            let addr = url.trim_start_matches("http://").trim_end_matches('/').to_string();
+            let addr = if addr.contains(':') { addr } else { format!("{addr}:80") };
+            addr.to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+                .is_some_and(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(2)).is_ok())
+        });
+        let _ = tx.send(reach);
     });
     rx
 }
@@ -363,13 +366,12 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
                 app.web_check = None;
             }
         }
-        match app.esp.web_url() {
-            Some(url) if app.web_check.is_none() && last_web.elapsed() >= Duration::from_secs(10) => {
-                last_web = Instant::now();
-                app.web_check = Some(check_web(&url));
-            }
-            None => app.web_reach = None,
-            _ => {}
+        let urls = app.esp.web_urls();
+        if urls.is_empty() {
+            app.web_reach = None;
+        } else if app.web_check.is_none() && last_web.elapsed() >= Duration::from_secs(10) {
+            last_web = Instant::now();
+            app.web_check = Some(check_web(urls));
         }
         // While the settings are open, keep the bridge's Wi-Fi state fresh
         let info_every = if app.settings.is_some() { 2 } else { 10 }; // the header shows the web page state
@@ -701,6 +703,11 @@ fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
             s.pass.clear();
         }
         Action::Forget => out.push(r#"{"ESP32": "Forget"}"#.into()),
+        Action::HotspotAlways => {
+            let always = !app.esp.hotspot_always;
+            app.esp.hotspot_always = always;
+            out.push(format!(r#"{{"ESP32": "Hotspot", "Always": {always}}}"#));
+        }
         Action::UseWifi => match app.esp.wifi_port() {
             Some(p) => app.switch_to = Some(p),
             None => app.esp.notice = Some(("the bridge is not on Wi-Fi yet".into(), true)),
@@ -734,7 +741,8 @@ fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
             }
         }
         Action::OpenWeb => {
-            if let Some(url) = app.esp.web_url() {
+            let url = app.web_reach.clone().flatten().or_else(|| app.esp.web_urls().into_iter().next());
+            if let Some(url) = url {
                 let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
                 let started = std::process::Command::new(opener)
                     .arg(&url)

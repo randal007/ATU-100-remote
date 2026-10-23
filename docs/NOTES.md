@@ -138,6 +138,22 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    ~/opt/arduino-cli, ArduinoJson 7.4.3; 45% flash). Untested on hardware.
    Web indicator: atutop also checks from the PC that the page is
    reachable (yellow "not reachable from here" otherwise).
+   **Hotspot decisions (2026-10-23):** password `hamradio`, address
+   192.168.73.1, an "always on" option (atutop settings, USB only,
+   `{"ESP32":"Hotspot","Always":true}`); no captive portal, no custom
+   hotspot password for now. Web page and port 7000 work on the hotspot
+   (off-grid use); no network retries while a station is on the hotspot
+   (the shared radio would move channel and drop it); mDNS from power-up;
+   Info reports Web true on the hotspot and HotspotIP. Done in firmware,
+   simulator and atutop.
+   **Next: the web version of atutop** (he likes the plan): split tui/
+   into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
+   shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui
+   0.30, mouse events with grid positions). ESP32: WebSocket that passes
+   lines like port 7000, serve the wasm files from flash. For phones: a
+   real HTML <input> placed over a focused field (phone keyboards send no
+   keydown; Ratzilla listens to keydown on the document), and a narrow
+   layout (~45 columns, boxes stacked) in the shared ui.
 5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
    the radio end (CL) or the antenna end (LC); C goes on the high
    impedance side; every tune picks it; saved in cell FD. Band memories

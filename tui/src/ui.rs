@@ -61,6 +61,7 @@ pub enum Action {
     ConnectType,
     ConnectGo,
     OpenWeb,
+    HotspotAlways,
     MinToggle,
     WindingOpen,
     WindingChoose(u8),
@@ -274,23 +275,28 @@ fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits)
     // the ESP32 bridge's web page: click to open it in the browser
     if app.esp.present == Some(true) {
         let start = Line::from(left.clone()).width() as u16 + 2;
-        let web = match app.esp.web_url() {
-            Some(url) if app.web_reach == Some(false) => vec![
+        let urls = app.esp.web_urls();
+        let short = |u: &str| u.trim_start_matches("http://").trim_end_matches('/').to_string();
+        let web = match (&app.web_reach, urls.first()) {
+            (_, None) => vec![Span::raw("  "), Span::styled("○ ", Style::new().fg(INACTIVE)), Span::styled("web server offline", Style::new().fg(GRAPH_TEXT))],
+            (Some(None), Some(first)) => vec![
                 Span::raw("  "),
                 Span::styled("● ", Style::new().fg(YELLOW)),
                 Span::styled("web server up, not reachable from here ", Style::new().fg(MAIN_FG)),
-                Span::styled(url.trim_start_matches("http://").trim_end_matches('/').to_string(), Style::new().fg(GRAPH_TEXT)),
+                Span::styled(short(first), Style::new().fg(GRAPH_TEXT)),
             ],
-            Some(url) => vec![
-                Span::raw("  "),
-                Span::styled("● ", Style::new().fg(GREEN)),
-                Span::styled("web server online ", Style::new().fg(MAIN_FG)),
-                Span::styled(url.trim_start_matches("http://").trim_end_matches('/').to_string(), Style::new().fg(TITLE).add_modifier(Modifier::UNDERLINED)),
-            ],
-            None => vec![Span::raw("  "), Span::styled("○ ", Style::new().fg(INACTIVE)), Span::styled("web server offline", Style::new().fg(GRAPH_TEXT))],
+            (reach, Some(first)) => {
+                let url = reach.clone().flatten().unwrap_or_else(|| first.clone());
+                vec![
+                    Span::raw("  "),
+                    Span::styled("● ", Style::new().fg(GREEN)),
+                    Span::styled("web server online ", Style::new().fg(MAIN_FG)),
+                    Span::styled(short(&url), Style::new().fg(TITLE).add_modifier(Modifier::UNDERLINED)),
+                ]
+            }
         };
         let width = Line::from(web.clone()).width() as u16;
-        if app.esp.web_url().is_some() {
+        if !urls.is_empty() {
             hits.areas.push((Rect { x: area.x + start, y: area.y, width: width.saturating_sub(2), height: 1 }, Action::OpenWeb));
         }
         left.extend(web);
@@ -690,11 +696,16 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     }
     let mut line = vec![label("Hotspot", lw)];
     if esp.hotspot {
-        line.extend([colored("● ".into(), GREEN), value(format!("on  {}", esp.hotspot_name)), dim("  setup page at 192.168.4.1".into())]);
+        line.extend([colored("● ".into(), GREEN), value(format!("on  {}", esp.hotspot_name)), dim(format!("  {}", esp.hotspot_ip))]);
     } else {
-        line.extend([colored("○ ".into(), INACTIVE), value("off".into()), dim("  on when the bridge cannot join a network".into())]);
+        line.extend([colored("○ ".into(), INACTIVE), value("off".into()), dim("  on when there is no network".into())]);
     }
     put(buf, y, line);
+    if usb && y < bottom {
+        let text = if esp.hotspot_always { "● always on" } else { "○ always on" };
+        let bw = text.chars().count() as u16 + 2;
+        button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, text, Action::HotspotAlways, true, hits);
+    }
     y += 1;
     rule(buf, y);
     y += 1;

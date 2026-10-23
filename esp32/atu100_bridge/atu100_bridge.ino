@@ -10,8 +10,15 @@
     - Its own messages carry an "ESP32" field and never reach the tuner
       (see README.md, "ESP32 bridge"; test/esp32_sim.py does the same on a
       PC). Wi-Fi settings change over USB only, or from the setup page on
-      its own hotspot "ATU100-setup", which comes up when it has no network
-      or cannot join it.
+      its own hotspot "ATU100-setup" (password hamradio, address
+      192.168.73.1), which comes up when it has no network or cannot join
+      it, or stays on always if set so. Everything works on the hotspot
+      too, for use off-grid with no other network.
+
+    The hotspot and the home network share one radio, so the hotspot
+    follows the home network's channel: joining a network moves it, and
+    anything on the hotspot drops for a moment. So it does not try the
+    home network again while someone is on the hotspot.
 
     Lines are passed whole: messages from different sides never mix.
 
@@ -33,7 +40,8 @@
 #define VERSION "1.0"
 #define HOST "atu100" // atu100.local
 #define HOTSPOT "ATU100-setup"
-#define HOTSPOT_PASS "atu100setup" // at least 8 characters for WPA2
+#define HOTSPOT_PASS "hamradio" // at least 8 characters for WPA2
+const IPAddress HOTSPOT_IP(192, 168, 73, 1);
 #define BRIDGE_PORT 7000
 #define FIND_PORT 7001
 #define WEB_PORT 80
@@ -90,7 +98,7 @@ WifiState wifiState = W_OFF;
 const char *wifiName[] = {"Off", "Connecting", "Connected", "Failed"};
 String ssid, pass, staticIp, gateway, mask;
 uint32_t wifiSince = 0, retryAt = 0, hotspotOffAt = 0;
-bool hotspot = false, mdnsOn = false;
+bool hotspot = false, hotspotAlways = false;
 int scanFor = -1; // who asked for a scan in progress
 
 // The tuner, for the web page
@@ -140,12 +148,13 @@ void startHotspot() {
   if (hotspot)
     return;
   WiFi.mode(ssid.length() ? WIFI_AP_STA : WIFI_AP);
+  WiFi.softAPConfig(HOTSPOT_IP, HOTSPOT_IP, IPAddress(255, 255, 255, 0));
   WiFi.softAP(HOTSPOT, HOTSPOT_PASS);
   hotspot = true;
 }
 
 void stopHotspot() {
-  if (!hotspot)
+  if (!hotspot || hotspotAlways)
     return;
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
@@ -178,6 +187,7 @@ void loadSettings() {
   staticIp = prefs.getString("ip", "");
   gateway = prefs.getString("gw", "");
   mask = prefs.getString("mask", "");
+  hotspotAlways = prefs.getBool("apAlways", false);
   prefs.end();
 }
 
@@ -188,6 +198,7 @@ void saveSettings() {
   prefs.putString("ip", staticIp);
   prefs.putString("gw", gateway);
   prefs.putString("mask", mask);
+  prefs.putBool("apAlways", hotspotAlways);
   prefs.end();
 }
 
@@ -198,12 +209,7 @@ void wifiLoop() {
   case W_CONNECTING:
     if (up) {
       wifiState = W_CONNECTED;
-      if (!mdnsOn && MDNS.begin(HOST)) {
-        MDNS.addService("http", "tcp", WEB_PORT);
-        MDNS.addService("atu100", "tcp", BRIDGE_PORT);
-        mdnsOn = true;
-      }
-      if (hotspot)
+      if (hotspot && !hotspotAlways)
         hotspotOffAt = now + HOTSPOT_LINGER; // time for the setup page to say so
     } else if (now - wifiSince > JOIN_TIMEOUT) {
       wifiState = W_FAILED;
@@ -224,8 +230,9 @@ void wifiLoop() {
     if (up)
       wifiState = W_CONNECTING; // joined after all
     else if ((int32_t)(now - retryAt) > 0) {
-      startJoin();
       retryAt = now + RETRY_EVERY;
+      if (WiFi.softAPgetStationNum() == 0) // not while someone uses the hotspot
+        startJoin();
     }
     break;
   case W_OFF:
@@ -249,10 +256,12 @@ void sendInfo(int who) {
   d["RSSI"] = up ? WiFi.RSSI() : 0;
   d["Host"] = HOST ".local";
   d["Port"] = BRIDGE_PORT;
-  d["Web"] = up;
+  d["Web"] = up || hotspot; // served on every network it is on
   d["WebPort"] = WEB_PORT;
   d["Hotspot"] = hotspot;
   d["HotspotName"] = HOTSPOT;
+  d["HotspotIP"] = hotspot ? HOTSPOT_IP.toString() : String("");
+  d["HotspotAlways"] = hotspotAlways;
   d["StaticIP"] = staticIp;
   d["Gateway"] = gateway;
   d["Mask"] = mask;
@@ -300,7 +309,7 @@ void command(int who, JsonDocument &doc) {
       notice(who, "Error", "scan failed");
     else
       scanFor = who;
-  } else if ((cmd == "WiFi" || cmd == "Forget") && who != USB) {
+  } else if ((cmd == "WiFi" || cmd == "Forget" || cmd == "Hotspot") && who != USB) {
     notice(who, "Error", "Wi-Fi settings change over USB only");
   } else if (cmd == "WiFi") {
     String err = applyWifi(doc["SSID"] | "", doc["Pass"].is<const char *>(), doc["Pass"] | "",
@@ -310,6 +319,14 @@ void command(int who, JsonDocument &doc) {
       notice(who, "Error", err);
     else
       notice(who, "OK", "saved, joining " + ssid);
+  } else if (cmd == "Hotspot") {
+    hotspotAlways = doc["Always"] | false;
+    saveSettings();
+    if (hotspotAlways)
+      startHotspot();
+    else if (wifiState == W_CONNECTED)
+      stopHotspot();
+    notice(who, "OK", hotspotAlways ? "hotspot always on" : "hotspot only when there is no network");
   } else if (cmd == "Forget") {
     ssid = pass = staticIp = gateway = mask = "";
     saveSettings();
@@ -493,9 +510,10 @@ void webSetup() {
     if (err.length())
       body += "<p style='color:#fa1e1e'>" + htmlEscape(err) + "</p><p><a href='/setup'>Back</a></p>";
     else
-      body += "<p>Saved. Joining <b>" + htmlEscape(ssid) + "</b>&hellip;</p><p>The hotspot closes about half a "
-              "minute after the bridge is on your network. Then open <b>http://atu100.local</b> there, or "
-              "use atutop's connect screen.</p>";
+      body += "<p>Saved. Joining <b>" + htmlEscape(ssid) + "</b>&hellip;</p><p>" +
+              String(hotspotAlways ? "The hotspot stays on. " : "The hotspot closes about half a minute after the "
+                                                                 "bridge is on your network. ") +
+              "On your network, open <b>http://atu100.local</b>, or use atutop's connect screen.</p>";
     web.send(200, "text/html", body);
     return;
   }
@@ -535,7 +553,14 @@ void setup() {
   loadSettings();
   WiFi.persistent(false); // our settings live in Preferences
   WiFi.setAutoReconnect(true);
+  if (hotspotAlways)
+    startHotspot();
   startJoin(); // or the hotspot, with nothing saved
+  // atu100.local on the hotspot and the home network alike
+  if (MDNS.begin(HOST)) {
+    MDNS.addService("http", "tcp", WEB_PORT);
+    MDNS.addService("atu100", "tcp", BRIDGE_PORT);
+  }
 
   bridge.begin();
   bridge.setNoDelay(true);
