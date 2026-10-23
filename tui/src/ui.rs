@@ -61,8 +61,7 @@ pub enum Action {
     ConnectType,
     ConnectGo,
     OpenWeb,
-    MinUp,
-    MinDown,
+    MinToggle,
     WindingOpen,
     WindingChoose(u8),
     WindingSetMin,
@@ -76,7 +75,6 @@ pub enum Action {
 pub struct Hits {
     pub areas: Vec<(Rect, Action)>,
     pub alarm_row: Option<Rect>, // scroll wheel here changes the limit
-    pub min_row: Option<Rect>,   // and here the minimum tuning power
 }
 
 impl Hits {
@@ -435,9 +433,8 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         None => value("off".into()),
     };
     lines.push((Line::from(vec![label("HighSWR", w), alarm, dim("  [ ] or wheel")]), None));
-    let min_at = lines.len();
     match t.min_power() {
-        Some(p) => lines.push((Line::from(vec![label("Tunes from", w), value(format!("{p} W")), dim("  wheel")]), None)),
+        Some(p) => lines.push((Line::from(vec![label("Tunes from", w), value(format!("{p} W")), dim("  click: 1 W / 5 W")]), Some(Action::MinToggle))),
         None => lines.push((Line::from(vec![label("Tunes from", w), dim("…")]), None)),
     }
     let winding = match (t.winding(), t.power_alarm()) {
@@ -456,9 +453,6 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         }
         if i == 8 {
             hits.alarm_row = Some(row);
-        }
-        if i == min_at {
-            hits.min_row = Some(row);
         }
         f.render_widget(Paragraph::new(line), row);
     }

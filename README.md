@@ -352,8 +352,9 @@ with the HighPower limit marked; the box flashes **HIGH POWER** on the
 alarm. Click **Winding** in the tuner box to change it: a box asks how the
 transformer is wound, warns that it must match, and that the 1:5 winding
 overloads the detector above about 40 W, and offers to set "Tunes from" to
-match (5 W or 1 W). The wheel on **Tunes from** changes the minimum
-tuning power (cell 05).
+match (5 W or 1 W). Click **Tunes from** to switch the minimum tuning
+power (cell 05) between 5 W and 1 W; other values can be set with
+`atu100.py -c s -a 05 -d NN`.
 
 **Web server:** with an ESP32 bridge on Wi-Fi the top line shows
 "● web server online" and its address; click it to open the bridge's page

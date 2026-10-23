@@ -397,8 +397,6 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
                     let up = m.kind == MouseEventKind::ScrollUp;
                     if over(hits.alarm_row) {
                         Some(if up { Action::AlarmUp } else { Action::AlarmDown })
-                    } else if over(hits.min_row) {
-                        Some(if up { Action::MinUp } else { Action::MinDown })
                     } else {
                         None
                     }
@@ -714,18 +712,13 @@ fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
                 }
             }
         }
-        Action::MinUp | Action::MinDown => {
-            // "Tunes from", 1 to 20 W (tens of W in high power mode)
-            let Some(now) = t.eeprom[CELL_MIN_POWER].map(|b| (b >> 4) * 10 + (b & 15)) else { return };
-            let next = if action == Action::MinUp { (now + 1).min(20) } else { now.saturating_sub(1).max(1) };
-            if next == now {
-                return;
-            }
-            let value = (next / 10) << 4 | next % 10;
-            t.eeprom[CELL_MIN_POWER] = Some(value);
-            out.push(format!(r#"{{"Set": {CELL_MIN_POWER}, "Value": {value}}}"#));
-            if next < 5 && t.winding().is_some_and(|k| k >= 9) && !t.high_power() {
-                t.log(format!("Tunes from {next} W: below 5 W the stock 1:10 winding reads too coarsely to tune well"), Kind::Warn);
+        Action::MinToggle => {
+            // "Tunes from": 5 W (N7DDC's default) or 1 W (for the 1:5 winding)
+            let next = if t.eeprom[CELL_MIN_POWER] == Some(5) { 1 } else { 5 };
+            t.eeprom[CELL_MIN_POWER] = Some(next);
+            out.push(format!(r#"{{"Set": {CELL_MIN_POWER}, "Value": {next}}}"#));
+            if next == 1 && t.winding().is_some_and(|k| k >= 9) && !t.high_power() {
+                t.log("Tunes from 1 W: the stock 1:10 winding reads too coarsely below 5 W to tune well", Kind::Warn);
             }
         }
         Action::WindingOpen => {
