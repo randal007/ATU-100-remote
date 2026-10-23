@@ -98,6 +98,15 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    (1:10 = 5 W min, 100 W max; 1:5 = 1 W min, 40 W max) and warns that
    the setting must match the actual winding or every power and SWR
    reading is wrong.
+   **His decisions (2026-10-23):** stock 1:10 winding: scale 0-100 W and
+   the over-power alarm above 100 W (the board's rating, even though the
+   detector reads to 150). 1:5 winding: maximum 40 W, alarm above 40 W.
+   Keep "Tunes from" (cell 05) a separate setting, but when the winding
+   changes, offer the matching value (1:10 -> 5 W, 1:5 -> 1 W). Make the
+   winding change obvious and deliberate: a prompt that says in plain
+   words the detector overloads above 40 W with the 1:5 winding, and that
+   the setting must match how the transformer is actually wound. Also warn
+   if "Tunes from" is set below 5 W while the winding is 1:10.
 5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
    the radio end (CL) or the antenna end (LC); C goes on the high
    impedance side; every tune picks it; saved in cell FD. Band memories
