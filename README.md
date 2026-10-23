@@ -201,6 +201,7 @@ the display-off timer (cell 32).
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
 | `Reset` | the relays were reset (button, command, or a tune given up) |
 | `HighSWR` | SWR at or above the limit in cell 37 with power present; sent within a few ms, again only after the SWR has dropped 0.1 below the limit or the power has gone. Not checked while tuning |
+| `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). Sent again only after the power has dropped 10% |
 | `Overload` | more power than the detector can measure |
 | `Error` | a command the tuner did not understand |
 | `Busy` | a command that arrived while a tune was waiting for carrier, and was not done |
@@ -261,7 +262,7 @@ N7DDC provides it, with `{"Set": ...}`, with `atu100.py -c s`, or in
 | 10–1D | Inductor values, two cells each, smallest first, nH: 01 10 = 110 nH | 50, 110, 220, 450, 1000, 2200, 4500 |
 | 20–2D | Capacitor values, two cells each, pF | 10, 22, 47, 100, 220, 470, 1000 |
 | 30 | High power mode, 01 = up to 9999 W in 1 W steps | 00 |
-| 31 | Tandem match turns ratio (power calibration) | 10 |
+| 31 | Tandem match turns ratio: must match the transformer's winding. 10 = 1:10 (stock: measures to 150 W, board rated 100 W); 05 = 1:5 (to about 40 W, better at 1 to 5 W). Sets the HighPower limit | 10 |
 | 32 | Display-off timer, seconds, 00 = always on | 00 |
 | 33 | Show antenna power and efficiency, 01 = on | 01 |
 | 34 | Feeder loss, dB: 12 = 1.2 dB | 12 |
@@ -344,6 +345,19 @@ pick a network, password, IP address from the router or fixed
 (address, gateway, mask), connect, forget, and **use Wi-Fi** to move
 from USB to Wi-Fi without restarting. Wi-Fi settings change over USB only.
 atutop reconnects by itself when the link drops.
+
+**Power and the detector winding:** the power meter's scale follows the
+tandem match winding (cell 31): 0–100 W for the stock 1:10, 0–40 W for 1:5,
+with the HighPower limit marked; the box flashes **HIGH POWER** on the
+alarm. Click **Winding** in the tuner box to change it: a box asks how the
+transformer is wound, warns that it must match, and that the 1:5 winding
+overloads the detector above about 40 W, and offers to set "Tunes from" to
+match (5 W or 1 W). The wheel on **Tunes from** changes the minimum
+tuning power (cell 05).
+
+**Web server:** with an ESP32 bridge on Wi-Fi the top line shows
+"● web server online" and its address; click it to open the bridge's page
+in the browser.
 
 It works from 80×24 up and takes the port for itself, so it and the Python
 tools cannot talk to the tuner at the same time. Commands go out one at a
@@ -497,7 +511,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15115 of 16384 program words (92%) and 662 of 1024
+The firmware uses 15245 of 16384 program words (93%) and 662 of 1024
 bytes of RAM.
 
 ## Testing without a tuner

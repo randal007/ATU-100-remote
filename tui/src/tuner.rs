@@ -10,6 +10,7 @@ pub const HISTORY: usize = 600; // samples, one every 0.5 s: five minutes
 pub const CELL_AUTO_SWR: usize = 0x04;
 pub const CELL_MIN_POWER: usize = 0x05;
 pub const CELL_HIGH_POWER: usize = 0x30;
+pub const CELL_WINDING: usize = 0x31; // tandem match turns ratio, BCD: 10 = 1:10
 pub const CELL_TUNE_MODE: usize = 0x36;
 pub const CELL_SWR_ALARM: usize = 0x37;
 const CELL_LAST_SW: usize = 0xfd;
@@ -44,6 +45,7 @@ pub struct Tuner {
     pub rev_mv: Option<i64>,
     pub tuning: bool,
     pub high_swr: bool,
+    pub high_power: bool,
     pub build: Option<String>,
     pub have_status: bool,
     pub eeprom: [Option<u8>; 256],
@@ -83,6 +85,7 @@ impl Tuner {
             rev_mv: None,
             tuning: false,
             high_swr: false,
+            high_power: false,
             build: None,
             have_status: false,
             eeprom: [None; 256],
@@ -127,6 +130,11 @@ impl Tuner {
                 "Bypass" => self.bypass = value.as_bool().unwrap_or(self.bypass),
                 "Power" => {
                     self.power = value.as_f64().unwrap_or(0.0);
+                    if let Some(limit) = self.power_alarm() {
+                        if self.power < limit * 0.9 {
+                            self.high_power = false;
+                        }
+                    }
                     self.have_status = true;
                     if !msg.contains_key("Antenna") {
                         self.antenna = None; // only sent while the tuner shows it
@@ -197,6 +205,10 @@ impl Tuner {
                 self.high_swr = true;
                 Kind::Bad
             }
+            "HighPower" => {
+                self.high_power = true;
+                Kind::Bad
+            }
             "Overload" | "Error" => Kind::Bad,
             "Busy" => Kind::Warn,
             _ => Kind::Info,
@@ -205,6 +217,8 @@ impl Tuner {
             "Tune" => "Tune: transmit a carrier".to_string(),
             "Tuned" => "Tuned".to_string(),
             "HighSWR" => format!("High SWR ({:.2})", self.swr),
+            "HighPower" => format!("High power ({:.0} W): more than the tuner is set up for", self.power),
+            "Overload" => "Overload: more power than the detector can measure".to_string(),
             "Startup" => "Tuner started".to_string(),
             "Restart" => "Tuner restarted by its watchdog".to_string(),
             "Reset" => "Relays reset".to_string(),
@@ -261,6 +275,35 @@ impl Tuner {
 
     pub fn high_power(&self) -> bool {
         self.eeprom[CELL_HIGH_POWER] == Some(1)
+    }
+
+    /// Tandem match turns ratio, 10 for 1:10
+    pub fn winding(&self) -> Option<i64> {
+        self.eeprom[CELL_WINDING].map(bcd)
+    }
+
+    /// The firmware's HighPower limit in W (as in its cells_init)
+    pub fn power_alarm(&self) -> Option<f64> {
+        let k = self.winding()?;
+        if self.high_power() {
+            None
+        } else if k >= 9 {
+            Some(100.0)
+        } else {
+            Some(1.4 * (k * k) as f64)
+        }
+    }
+
+    /// Power meter scale: 0-100 W for the stock winding, 0-40 W for 1:5
+    pub fn power_scale(&self) -> Option<f64> {
+        let k = self.winding()?;
+        if self.high_power() {
+            None
+        } else if k >= 9 {
+            Some(100.0)
+        } else {
+            Some((1.6 * (k * k) as f64).round())
+        }
     }
 
     pub fn auto_swr(&self) -> Option<f64> {

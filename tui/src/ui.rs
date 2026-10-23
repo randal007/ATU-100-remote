@@ -60,6 +60,14 @@ pub enum Action {
     ConnectPick(u8),
     ConnectType,
     ConnectGo,
+    OpenWeb,
+    MinUp,
+    MinDown,
+    WindingOpen,
+    WindingChoose(u8),
+    WindingSetMin,
+    WindingApply,
+    WindingCancel,
     Quit,
 }
 
@@ -68,6 +76,7 @@ pub enum Action {
 pub struct Hits {
     pub areas: Vec<(Rect, Action)>,
     pub alarm_row: Option<Rect>, // scroll wheel here changes the limit
+    pub min_row: Option<Rect>,   // and here the minimum tuning power
 }
 
 impl Hits {
@@ -196,7 +205,7 @@ fn short(v: i64, unit_small: &str, unit_big: &str) -> String {
 pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     let mut hits = Hits::default();
     let [header, body, keys] = Layout::vertical([Constraint::Length(1), Constraint::Min(10), Constraint::Length(1)]).areas(f.area());
-    draw_header(f, header, t, app);
+    draw_header(f, header, t, app, &mut hits);
     let top_h = (body.height / 2).max(9);
     let [top, bottom] = Layout::vertical([Constraint::Length(top_h), Constraint::Min(8)]).areas(body);
     let [power, swr] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
@@ -208,7 +217,17 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     let [relays, events] = Layout::vertical([Constraint::Length(6), Constraint::Min(3)]).areas(right);
     draw_relays(f, relays, t, &mut hits);
     draw_events(f, events, t);
-    if app.connect.is_some() {
+    if app.winding.is_some() {
+        hits = Hits::default();
+        draw_winding(f, body, t, app, &mut hits);
+        let keys_list = [
+            ("Esc", "cancel", Action::WindingCancel, false),
+            ("↑↓", "choose", Action::WindingCancel, false),
+            ("Space", "tunes from too", Action::WindingSetMin, false),
+            ("Enter", "apply", Action::WindingApply, false),
+        ];
+        draw_key_list(f, keys, &keys_list, &mut hits);
+    } else if app.connect.is_some() {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_connect(f, body, app, &mut hits);
         let keys_list = [
@@ -238,7 +257,7 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     hits
 }
 
-fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
+fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
     let live = t.last_rx.is_some_and(|r| r.elapsed().as_secs() < 12);
     let (dot, state) = match (&app.link_error, live) {
         (Some(e), _) => (Span::styled("● ", Style::new().fg(RED)), Span::styled(e.clone(), Style::new().fg(RED))),
@@ -254,7 +273,24 @@ fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
         dot,
         state,
     ];
-    if let Some(b) = &t.build {
+    // the ESP32 bridge's web page: click to open it in the browser
+    if app.esp.present == Some(true) {
+        let start = Line::from(left.clone()).width() as u16 + 2;
+        let web = match app.esp.web_url() {
+            Some(url) => vec![
+                Span::raw("  "),
+                Span::styled("● ", Style::new().fg(GREEN)),
+                Span::styled("web server online ", Style::new().fg(MAIN_FG)),
+                Span::styled(url.trim_start_matches("http://").trim_end_matches('/').to_string(), Style::new().fg(TITLE).add_modifier(Modifier::UNDERLINED)),
+            ],
+            None => vec![Span::raw("  "), Span::styled("○ ", Style::new().fg(INACTIVE)), Span::styled("web server offline", Style::new().fg(GRAPH_TEXT))],
+        };
+        let width = Line::from(web.clone()).width() as u16;
+        if app.esp.web_url().is_some() {
+            hits.areas.push((Rect { x: area.x + start, y: area.y, width: width.saturating_sub(2), height: 1 }, Action::OpenWeb));
+        }
+        left.extend(web);
+    } else if let Some(b) = &t.build {
         left.push(Span::styled(format!("  ATU-100 · {b}"), Style::new().fg(GRAPH_TEXT)));
     }
     f.render_widget(Paragraph::new(Line::from(left)), area);
@@ -263,14 +299,19 @@ fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
 }
 
 fn draw_power(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
-    let mut block = boxed("¹", "power", BOX_POWER);
+    let alarm_on = t.high_power && app.started.elapsed().as_millis() / 500 % 2 == 0;
+    let mut block = boxed("¹", "power", if alarm_on { RED } else { BOX_POWER });
+    if t.high_power && !t.tuning {
+        block = block.title(Line::from(Span::styled(" HIGH POWER ", Style::new().fg(TITLE).bg(HI).add_modifier(Modifier::BOLD))).centered());
+    }
     if t.tuning {
         let on = app.started.elapsed().as_millis() / 500 % 2 == 0;
         let style = if on { Style::new().fg(TITLE).bg(HI).add_modifier(Modifier::BOLD) } else { Style::new().fg(HI).add_modifier(Modifier::BOLD) };
         block = block.title(Line::from(Span::styled(" TUNING · transmit a carrier ", style)).centered());
     }
+    // fixed by the detector winding when known, else following the peak
     let peak = t.power_hist.iter().copied().fold(t.power, f64::max);
-    let scale = nice_max((peak * 1.2).max(1.0)); // some headroom above the peak
+    let scale = t.power_scale().unwrap_or_else(|| nice_max((peak * 1.2).max(1.0)));
     block = block.title(corner(format!("0 – {}", watts(scale)), BOX_POWER));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -293,6 +334,13 @@ fn draw_power(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
     f.render_widget(Paragraph::new(Line::from(right).right_aligned()), row);
     let bar = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: 1 };
     meter(f.buffer_mut(), bar, t.power / scale);
+    // the HighPower limit as a mark on the meter
+    if let Some(a) = t.power_alarm().filter(|a| *a < scale) {
+        let x = bar.x + ((a / scale) * bar.width.saturating_sub(1) as f64).round() as u16;
+        if let Some(cell) = f.buffer_mut().cell_mut((x, bar.y)) {
+            cell.set_symbol("┃").set_fg(TITLE);
+        }
+    }
     let g = Rect { x: inner.x, y: inner.y + 2, width: inner.width, height: inner.height - 2 };
     graph(f.buffer_mut(), g, t.power_hist.iter().map(|p| p / scale));
 }
@@ -387,9 +435,17 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         None => value("off".into()),
     };
     lines.push((Line::from(vec![label("HighSWR", w), alarm, dim("  [ ] or wheel")]), None));
-    if let Some(p) = t.min_power() {
-        lines.push((Line::from(vec![label("Tunes from", w), value(format!("{p} W"))]), None));
+    let min_at = lines.len();
+    match t.min_power() {
+        Some(p) => lines.push((Line::from(vec![label("Tunes from", w), value(format!("{p} W")), dim("  wheel")]), None)),
+        None => lines.push((Line::from(vec![label("Tunes from", w), dim("…")]), None)),
     }
+    let winding = match (t.winding(), t.power_alarm()) {
+        (Some(k), Some(a)) => vec![label("Winding", w), value(format!("1:{k}")), dim(&format!("  to {a:.0} W  click"))],
+        (Some(k), None) => vec![label("Winding", w), value(format!("1:{k}")), dim("  high power mode")],
+        _ => vec![label("Winding", w), dim("…")],
+    };
+    lines.push((Line::from(winding), Some(Action::WindingOpen)));
     for (i, (line, action)) in lines.into_iter().enumerate() {
         if i as u16 >= inner.height {
             break;
@@ -400,6 +456,9 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         }
         if i == 8 {
             hits.alarm_row = Some(row);
+        }
+        if i == min_at {
+            hits.min_row = Some(row);
         }
         f.render_widget(Paragraph::new(line), row);
     }
@@ -824,5 +883,69 @@ fn draw_connect(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         if y < bottom {
             buf.set_string(inner.x + 1, y, e, Style::new().fg(RED));
         }
+    }
+}
+
+/// The detector winding: a choice that must match the hardware, so it is
+/// asked for in a box that says what goes wrong otherwise
+fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
+    let Some(d) = &app.winding else { return };
+    let w = body.width.saturating_sub(4).min(76);
+    let h = body.height.min(19);
+    let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
+    f.render_widget(Clear, area);
+    let block = boxed("⁷", "detector winding", RED).title(corner("Esc to cancel".into(), RED));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let buf = f.buffer_mut();
+    let bottom = inner.y + inner.height;
+    let mut y = inner.y;
+    let text = |buf: &mut Buffer, y: &mut u16, s: &str, c: Color| {
+        if *y < bottom {
+            buf.set_string(inner.x + 1, *y, s, Style::new().fg(c));
+        }
+        *y += 1;
+    };
+    text(buf, &mut y, "How is the tandem match (the SWR detector's transformer) wound?", TITLE);
+    let now = t.winding().map(|k| format!("The tuner is set for 1:{k} now.")).unwrap_or_default();
+    text(buf, &mut y, &now, GRAPH_TEXT);
+    y += 1;
+    let choices: [(u8, &str, &str); 2] = [
+        (10, "1:10  stock", "5 to 100 W, alarm above 100 W, tunes from 5 W"),
+        (5, "1:5   low power", "1 to 40 W, alarm above 35 W, tunes from 1 W"),
+    ];
+    for (k, name, what) in choices {
+        if y >= bottom {
+            break;
+        }
+        let on = d.choice == k;
+        let style = if on { Style::new().fg(TITLE).bg(ON_BG).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG).bg(DIV) };
+        let chip = format!(" {} {name:<16}", if on { "●" } else { "○" });
+        buf.set_string(inner.x + 2, y, &chip, style);
+        buf.set_string(inner.x + 3 + chip.chars().count() as u16, y, what, Style::new().fg(GRAPH_TEXT));
+        hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::WindingChoose(k)));
+        y += 1;
+    }
+    y += 1;
+    text(buf, &mut y, "This must match how the transformer is really wound. If it does not,", YELLOW);
+    text(buf, &mut y, "every power and SWR reading is wrong, and so is the tuning.", YELLOW);
+    if d.choice == 5 {
+        y += 1;
+        text(buf, &mut y, "With the 1:5 winding the detector overloads above about 40 W:", RED);
+        text(buf, &mut y, "keep the transmitter at 35 W or less. The board takes 100 W only", RED);
+        text(buf, &mut y, "with the stock 1:10 winding.", RED);
+    }
+    y += 1;
+    if y < bottom {
+        let min = if d.choice == 5 { 1 } else { 5 };
+        let line = format!(" [{}] also set \"Tunes from\" to {min} W", if d.set_min { "x" } else { " " });
+        buf.set_string(inner.x + 1, y, &line, Style::new().fg(MAIN_FG));
+        hits.areas.push((Rect { x: inner.x, y, width: line.chars().count() as u16 + 1, height: 1 }, Action::WindingSetMin));
+        y += 2;
+    }
+    if y < bottom {
+        let x = inner.x + 2;
+        let aw = button(buf, x, y, "apply", Action::WindingApply, true, hits);
+        button(buf, x + aw + 2, y, "cancel", Action::WindingCancel, true, hits);
     }
 }

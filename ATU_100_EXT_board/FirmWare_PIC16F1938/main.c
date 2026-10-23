@@ -51,6 +51,8 @@ int g_i_Power_tx = 0;    // transmitter power, as shown after PWR=
 int g_i_loss_swr_old = 0; // SWR the antenna power was last worked out for
 int e_i_swr_alarm;       // HighSWR event above this, SWR * 100; 0 = off
 char g_b_swr_alarm = 0;  // HighSWR sent, waiting for the SWR to come down
+int e_i_power_alarm;     // HighPower event above this, tenths of W; 0 = off
+char g_b_power_alarm = 0; // HighPower sent, waiting for the power to come down
 
 /*  initial eeprom values*/
 __eeprom unsigned char initial_eeprom[256] = {
@@ -1008,6 +1010,24 @@ static void swr_alarm(void)
       g_b_swr_alarm = 0;
 }
 
+// More power than the board or the detector winding is good for: the
+// board is rated 100 W; a 1:5 tandem match tops out near 37 W
+static void power_alarm(void)
+{
+   if (e_i_power_alarm == 0)
+      return;
+   if (g_i_PWR >= e_i_power_alarm)
+   {
+      if (!g_b_power_alarm)
+      {
+         g_b_power_alarm = 1;
+         json_event("HighPower");
+      }
+   }
+   else if (g_i_PWR < e_i_power_alarm - e_i_power_alarm / 10)
+      g_b_power_alarm = 0;
+}
+
 void lcd_pwr()
 {
    int p = 0;
@@ -1031,6 +1051,7 @@ void lcd_pwr()
          return; // a button, or a serial message to answer straight away
       get_pwr();
       swr_alarm();
+      power_alarm();
       if (g_i_PWR > p)
       {
          p = g_i_PWR;
@@ -1220,6 +1241,18 @@ void cells_init(void)
    e_c_tune_mode = eeprom_read(EEPROM_TUNE_MODE);
    i = eeprom_read(EEPROM_SWR_ALARM);
    e_i_swr_alarm = (i == 0xff) ? 300 : Bcd2Dec(i) * 10; // unset: 3.0
+   // HighPower: the board's 100 W, or less for a smaller winding (power
+   // goes with the turns ratio squared: 1.4 W x ratio^2, 35 W at 1:5).
+   // Off in high power mode, where the board was built for more.
+   if (e_c_b_P_High)
+      e_i_power_alarm = 0;
+   else
+   {
+      if (e_c_K_Mult >= 9) // 1.4 x 81 is past 100 W already
+         e_i_power_alarm = 1000; // tenths of W
+      else
+         e_i_power_alarm = 14 * e_c_K_Mult * e_c_K_Mult;
+   }
    CLRWDT();
    return;
 }

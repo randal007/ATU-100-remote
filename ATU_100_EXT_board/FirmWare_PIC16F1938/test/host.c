@@ -692,7 +692,24 @@ static void scenario(void)
         break;
 
     case 14:
-        if (waited(2))
+        if (waited(2)) {
+            check(!got("\"Event\":\"HighPower\""), "no HighPower alarm at 10 W");
+            fwd_mv = 3300; // about 120 W into the stock 1:10 winding
+            next();
+        }
+        break;
+
+    case 15:
+        if (got("\"Event\":\"HighPower\"")) {
+            check(!got("\"Event\":\"Overload\""), "HighPower alarm above the board's 100 W, before the detector overloads");
+            fwd_mv = 900;
+            next();
+        } else
+            timeout(3, "HighPower event");
+        break;
+
+    case 16:
+        if (waited(1))
             finish();
         break;
     }

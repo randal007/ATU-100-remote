@@ -21,8 +21,11 @@ When atutop goes (even without quitting properly) this stops the tuner,
 removes USB_LINK and ends.
 """
 
+import html
+import http.server
 import json
 import os
+import threading
 import pty
 import selectors
 import signal
@@ -83,24 +86,41 @@ class Bridge:
         self.usb = Client('USB', fd=master)
         self.sel.register(master, selectors.EVENT_READ, self.usb)
         path = os.ttyname(slave)
+
+        # The network ports; when another simulator has them, the next free
+        # ones (the bridge reports where it is, so atutop still finds it)
+        self.server = socket.socket()
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        for self.port in range(PORT, PORT + 10):
+            if self.port == FIND_PORT:
+                continue
+            try:
+                self.server.bind(('127.0.0.1', self.port))
+                break
+            except OSError:
+                continue
+        self.server.listen(2)
+        self.last_status = ''
+        self.web = http.server.ThreadingHTTPServer(('127.0.0.1', 0), self.page_handler())
+        self.web_port = self.web.server_address[1]
+        threading.Thread(target=self.web.serve_forever, daemon=True).start()
+
         try:
             os.unlink(usb_link)
         except FileNotFoundError:
             pass
         os.symlink(path, usb_link)
-        print(f'USB port: {path} (linked at {usb_link})', flush=True)
-
-        self.server = socket.socket()
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.bind(('127.0.0.1', PORT))
-        self.server.listen(2)
+        print(f'USB port: {path} (linked at {usb_link}), bridge port {self.port}, web page port {self.web_port}', flush=True)
         self.server.setblocking(False)
         self.sel.register(self.server, selectors.EVENT_READ, 'server')
         self.wifi_clients = []
 
         self.finder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.finder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.finder.bind(('0.0.0.0', FIND_PORT))
+        try:
+            self.finder.bind(('0.0.0.0', FIND_PORT))
+        except OSError:
+            self.finder.bind(('0.0.0.0', 0))  # another simulator answers the search
         self.finder.setblocking(False)
         self.sel.register(self.finder, selectors.EVENT_READ, 'finder')
         self.static = None  # (ip, gateway, mask), None for the router's choice
@@ -135,6 +155,28 @@ class Bridge:
             for c in list(self.wifi_clients):
                 self.drop(c)
 
+    def page_handler(bridge):
+        """The bridge's web page, a stand-in for the real one: the tuner's
+        latest status, refreshed every two seconds"""
+        class Page(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = ('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="2">'
+                        '<title>ATU-100 bridge (simulated)</title>'
+                        '<body style="font-family:sans-serif;background:#111;color:#ddd;padding:2em">'
+                        '<h1>ATU-100 bridge</h1><p>Simulated ESP32 bridge. The real one will show SWR, '
+                        'power, L and C here, with Tune, Reset, Bypass and Auto buttons.</p>'
+                        f'<p>Wi-Fi: {html.escape(bridge.state)}</p>'
+                        f'<pre>{html.escape(bridge.last_status)}</pre></body>').encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+        return Page
+
     def reply(self, client, msg):
         client.send((json.dumps(msg, separators=(',', ':')) + '\n').encode())
 
@@ -146,7 +188,8 @@ class Bridge:
             'SSID': self.saved[0] if self.saved else '',
             'IP': '127.0.0.1' if connected else '',
             'RSSI': next((n[1] for n in NETWORKS if self.saved and n[0] == self.saved[0]), 0) if connected else 0,
-            'Host': HOST, 'Port': PORT,
+            'Host': HOST, 'Port': self.port,
+            'Web': connected, 'WebPort': self.web_port,
             'Hotspot': self.hotspot, 'HotspotName': HOTSPOT,
             'StaticIP': self.static[0] if self.static else '',
             'Gateway': self.static[1] if self.static else '',
@@ -208,6 +251,8 @@ class Bridge:
         self.tuner_buf += data
         while b'\n' in self.tuner_buf:
             line, self.tuner_buf = self.tuner_buf.split(b'\n', 1)
+            if b'"SWR"' in line:
+                self.last_status = line.decode(errors='replace')
             for c in [self.usb] + self.wifi_clients:
                 c.send(line + b'\n')
 
@@ -228,7 +273,7 @@ class Bridge:
                     except ValueError:
                         continue
                     if isinstance(ask, dict) and ask.get('ESP32') == 'Find' and self.state == 'Connected':
-                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': '127.0.0.1', 'Port': PORT,
+                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': '127.0.0.1', 'Port': self.port,
                                 'Host': HOST, 'SSID': self.saved[0]}
                         self.finder.sendto(json.dumps(here, separators=(',', ':')).encode(), addr)
                 elif what == 'tuner':
@@ -277,4 +322,14 @@ if __name__ == '__main__':
         del args[i:i + 2]
     if not args:
         sys.exit(__doc__)
-    Bridge(args[0], args[1] if len(args) > 1 else '/tmp/atu100-esp32', watch).run()
+    bridge = Bridge(args[0], args[1] if len(args) > 1 else '/tmp/atu100-esp32', watch)
+
+    def stop(*_):
+        try:
+            os.unlink(bridge.usb_link)
+        except OSError:
+            pass
+        sys.exit(0)
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, stop)
+    bridge.run()

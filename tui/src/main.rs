@@ -17,7 +17,7 @@ use ratatui::crossterm::execute;
 use std::collections::VecDeque;
 use std::io::stdout;
 use std::time::{Duration, Instant};
-use tuner::{alarm_bcd, Kind, Tuner, CELL_SWR_ALARM, CELL_TUNE_MODE};
+use tuner::{alarm_bcd, Kind, Tuner, CELL_MIN_POWER, CELL_SWR_ALARM, CELL_TUNE_MODE, CELL_WINDING};
 use ui::Action;
 
 pub struct App {
@@ -29,7 +29,13 @@ pub struct App {
     pub settings: Option<Settings>, // the settings box, while it is open
     pub connect: Option<connect::Connect>, // the connect screen, while it is open
     sim: Option<connect::Simulator>,       // started from the connect screen
-    switch_to: Option<String>,      // a port to move to
+    pub winding: Option<WindingDialog>,    // the detector winding box, while open
+    switch_to: Option<String>,             // a port to move to
+}
+
+pub struct WindingDialog {
+    pub choice: u8,    // 10 or 5: the turns ratio 1:10 or 1:5
+    pub set_min: bool, // set "Tunes from" to match
 }
 
 /// The settings box: the Wi-Fi settings being typed
@@ -193,7 +199,7 @@ fn main() {
         return;
     }
     let port = arg.or_else(|| std::env::var("ATU100_PORT").ok());
-    let mut app = App { port: String::new(), link_error: None, detector: false, started: Instant::now(), esp: Esp::default(), settings: None, connect: None, sim: None, switch_to: None };
+    let mut app = App { port: String::new(), link_error: None, detector: false, started: Instant::now(), esp: Esp::default(), settings: None, connect: None, sim: None, winding: None, switch_to: None };
     let mut link = None;
     match port {
         Some(port) => match Link::open(&port) {
@@ -330,7 +336,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
         }
         app.esp.check_probe();
         // While the settings are open, keep the bridge's Wi-Fi state fresh
-        if app.settings.is_some() && app.esp.present == Some(true) && last_info.elapsed() >= Duration::from_secs(2) && out.idle() {
+        let info_every = if app.settings.is_some() { 2 } else { 10 }; // the header shows the web page state
+        if app.esp.present == Some(true) && last_info.elapsed() >= Duration::from_secs(info_every) && out.idle() {
             last_info = Instant::now();
             out.push(PROBE.into());
         }
@@ -358,6 +365,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
             continue;
         }
         let action = match event::read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press && app.winding.is_some() => match k.code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::WindingCancel),
+                KeyCode::Enter => Some(Action::WindingApply),
+                KeyCode::Char(' ') => Some(Action::WindingSetMin),
+                KeyCode::Up | KeyCode::Char('1') => Some(Action::WindingChoose(10)),
+                KeyCode::Down | KeyCode::Char('5') => Some(Action::WindingChoose(5)),
+                _ => None,
+            },
             Event::Key(k) if k.kind == KeyEventKind::Press && app.connect.is_some() => connect_key(k, app, link.is_some()),
             Event::Key(k) if k.kind == KeyEventKind::Press && app.settings.is_some() => settings_key(k, app),
             Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
@@ -377,12 +392,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Option<Link>, out: &m
             },
             Event::Mouse(m) => match m.kind {
                 MouseEventKind::Down(MouseButton::Left) => hits.at(m.column, m.row),
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if app.settings.is_none() && app.connect.is_none() => {
-                    let over_alarm = hits.alarm_row.is_some_and(|r| m.row == r.y && m.column >= r.x && m.column < r.x + r.width);
-                    match (over_alarm, m.kind) {
-                        (true, MouseEventKind::ScrollUp) => Some(Action::AlarmUp),
-                        (true, _) => Some(Action::AlarmDown),
-                        _ => None,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if app.settings.is_none() && app.connect.is_none() && app.winding.is_none() => {
+                    let over = |r: Option<ratatui::layout::Rect>| r.is_some_and(|r| m.row == r.y && m.column >= r.x && m.column < r.x + r.width);
+                    let up = m.kind == MouseEventKind::ScrollUp;
+                    if over(hits.alarm_row) {
+                        Some(if up { Action::AlarmUp } else { Action::AlarmDown })
+                    } else if over(hits.min_row) {
+                        Some(if up { Action::MinUp } else { Action::MinDown })
+                    } else {
+                        None
                     }
                 }
                 _ => None,
@@ -680,6 +698,63 @@ fn act(action: Action, out: &mut Outbox, t: &mut Tuner, app: &mut App) {
                 c.error = None;
                 app.switch_to = c.chosen();
             }
+        }
+        Action::OpenWeb => {
+            if let Some(url) = app.esp.web_url() {
+                let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
+                let started = std::process::Command::new(opener)
+                    .arg(&url)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                match started {
+                    Ok(_) => t.log(format!("Opening {url}"), Kind::Info),
+                    Err(e) => t.log(format!("Cannot open a browser: {e}"), Kind::Bad),
+                }
+            }
+        }
+        Action::MinUp | Action::MinDown => {
+            // "Tunes from", 1 to 20 W (tens of W in high power mode)
+            let Some(now) = t.eeprom[CELL_MIN_POWER].map(|b| (b >> 4) * 10 + (b & 15)) else { return };
+            let next = if action == Action::MinUp { (now + 1).min(20) } else { now.saturating_sub(1).max(1) };
+            if next == now {
+                return;
+            }
+            let value = (next / 10) << 4 | next % 10;
+            t.eeprom[CELL_MIN_POWER] = Some(value);
+            out.push(format!(r#"{{"Set": {CELL_MIN_POWER}, "Value": {value}}}"#));
+            if next < 5 && t.winding().is_some_and(|k| k >= 9) && !t.high_power() {
+                t.log(format!("Tunes from {next} W: below 5 W the stock 1:10 winding reads too coarsely to tune well"), Kind::Warn);
+            }
+        }
+        Action::WindingOpen => {
+            let choice = if t.winding() == Some(5) { 5 } else { 10 };
+            app.winding = Some(WindingDialog { choice, set_min: true });
+        }
+        Action::WindingChoose(k) => {
+            if let Some(d) = app.winding.as_mut() {
+                d.choice = k;
+            }
+        }
+        Action::WindingSetMin => {
+            if let Some(d) = app.winding.as_mut() {
+                d.set_min = !d.set_min;
+            }
+        }
+        Action::WindingCancel => app.winding = None,
+        Action::WindingApply => {
+            let Some(d) = app.winding.take() else { return };
+            let value = (d.choice / 10) << 4 | d.choice % 10; // BCD: 10 -> 0x10
+            t.eeprom[CELL_WINDING] = Some(value);
+            out.push(format!(r#"{{"Set": {CELL_WINDING}, "Value": {value}}}"#));
+            if d.set_min {
+                let min = if d.choice == 5 { 1 } else { 5 };
+                t.eeprom[CELL_MIN_POWER] = Some(min);
+                out.push(format!(r#"{{"Set": {CELL_MIN_POWER}, "Value": {min}}}"#));
+            }
+            t.high_power = false;
+            t.log(format!("Detector winding set to 1:{}", d.choice), Kind::Warn);
         }
         Action::Quit => {}
     }

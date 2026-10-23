@@ -26,6 +26,8 @@ pub struct Esp {
     pub port: u16,
     pub hotspot: bool,
     pub hotspot_name: String,
+    pub web: bool, // its web page is being served
+    pub web_port: u16,
     pub static_ip: String, // empty: the router gives the address (DHCP)
     pub gateway: String,
     pub mask: String,
@@ -76,6 +78,8 @@ impl Esp {
                 self.port = i("Port") as u16;
                 self.hotspot = msg.get("Hotspot").and_then(|v| v.as_bool()).unwrap_or(false);
                 self.hotspot_name = s("HotspotName");
+                self.web = msg.get("Web").and_then(|v| v.as_bool()).unwrap_or(false);
+                self.web_port = i("WebPort") as u16;
                 self.static_ip = s("StaticIP");
                 self.gateway = s("Gateway");
                 self.mask = s("Mask");
@@ -103,6 +107,14 @@ impl Esp {
             _ => {}
         }
         true
+    }
+
+    /// The bridge's web page, when it is up
+    pub fn web_url(&self) -> Option<String> {
+        (self.web && self.wifi == "Connected" && !self.ip.is_empty()).then(|| match self.web_port {
+            0 | 80 => format!("http://{}/", self.ip),
+            p => format!("http://{}:{p}/", self.ip),
+        })
     }
 
     /// Where to reach the bridge over Wi-Fi, once it is on the network

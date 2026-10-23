@@ -107,6 +107,19 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    words the detector overloads above 40 W with the 1:5 winding, and that
    the setting must match how the transformer is actually wound. Also warn
    if "Tunes from" is set below 5 W while the winding is 1:10.
+   **Done 2026-10-23 late:** firmware `HighPower` event (main.c
+   power_alarm, limit from cell 31: 100 W at 1:9 and up, else 1.4 x K^2 =
+   35 W at 1:5, because the 1:5 detector tops out near 37 W, so a 40 W
+   alarm would never fire before Overload; off in high power mode);
+   simulator check at ~120 W. atutop: fixed scale (100 W / 40 W), limit
+   mark, HIGH POWER flash, Winding row -> confirm dialog (sets cells 31
+   and optionally 05), wheel on Tunes from with a warning below 5 W at
+   1:10. Tell him the 35 W choice.
+   **Web server indicator (asked same night), done:** header shows
+   "● web server online IP:port" from the bridge's Info (`Web`,
+   `WebPort`), click opens it with xdg-open. The simulated bridge serves a
+   stand-in page; the real ESP32 page is still to write. The simulated
+   bridge takes the next free port if 7000 is in use.
 5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
    the radio end (CL) or the antenna end (LC); C goes on the high
    impedance side; every tune picks it; saved in cell FD. Band memories
