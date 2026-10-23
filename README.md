@@ -11,16 +11,22 @@ tuner.
   transmitter and antenna power, relays, events, settings.
 - A tuning search that finds a match far more often than the original
   (the original is still there, one setting away).
-- High SWR alarm, detector readings, settings that apply without a restart.
-- **atutop**, a btop-style terminal program with gauges, graphs and mouse
-  control; Python tools for scripting; an Arduino Mega sketch to start from.
-- A PC simulator that runs the real firmware code, so it can be tested
-  without a tuner.
+- High SWR and high power alarms, detector readings, settings that apply
+  without a restart.
+- **atutop**, a btop-style program with gauges, graphs and mouse control,
+  in a terminal or, served by the ESP32 bridge, in a web browser on a
+  laptop or phone. It changes every setting a PICkit would, including your
+  own measured inductor and capacitor values.
+- An **ESP32 bridge** firmware: USB and Wi-Fi to the tuner, its own hotspot
+  for use off-grid, and a port for an Arduino Mega.
+- Python tools for scripting; an Arduino Mega sketch to start from.
+- A PC simulator that runs the real firmware code, and a simulated ESP32
+  bridge, so all of it can be tried without hardware.
 
 > **Status, October 2026:** everything here has been tested in the
-> simulator only. It has not yet been flashed into a tuner or used on the
-> air. Keep the backup described under [Installing](#installing) so you can
-> go back to your old firmware.
+> simulator only. Neither the tuner firmware nor the ESP32 bridge has run
+> on real hardware or been used on the air yet. Keep the backup described
+> under [Installing](#installing) so you can go back to your old firmware.
 
 This is the `display-buttons-uart` branch of
 [randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote).
@@ -38,6 +44,7 @@ See [History](#history) for the line of projects it comes from.
 - [atutop](#atutop)
 - [Python tools](#python-tools)
 - [Arduino Mega sketch](#arduino-mega-sketch)
+- [ESP32 bridge](#esp32-bridge)
 - [Building](#building)
 - [Testing without a tuner](#testing-without-a-tuner)
 - [Source files](#source-files)
@@ -54,7 +61,8 @@ See [History](#history) for the line of projects it comes from.
 | Tx_req output to the radio | yes | no | no: `Tune`/`Tuned` messages instead |
 | Tuning | N7DDC search | N7DDC search | log grid search, or N7DDC's |
 | Antenna power and efficiency over serial | — | reported as "Power" | separate fields |
-| High SWR alarm, detector readings, live settings | — | — | yes |
+| High SWR and high power alarms, detector readings, live settings | — | — | yes |
+| Every setting changed without a programmer | — | over serial, as raw bytes | over serial; atutop shows them in plain units |
 
 Bugs fixed along the way, in N7DDC's code, the XC8 port and the serial code:
 features the XC8 port had dropped (RF waking the display, the 9999 W
@@ -131,7 +139,8 @@ The pin order matches pins 1 to 5 of a PICkit.
    `python/atu100.py -p PORT -c u -e settings.json`.
    The settings matter: N7DDC's defaults are for a 1602 LCD, the defaults in
    this hex are for a 128×64 OLED, and the wrong display type leaves the
-   screen blank.
+   screen blank. Once the firmware is in, atutop's **ATU-100 settings** can
+   change any of them over the serial link, no programmer needed.
 3. **Check it.** At power up the display shows the ATU-100 splash as before,
    and the serial port sends `{"Event":"Startup"}` and the board information.
 
@@ -228,6 +237,7 @@ and values.
 | `{"Set": cell, "Value": n}` | write a cell, both in decimal. Takes effect at once; display settings restart the display |
 | `{"Dump": "EEPROM"}` | all 256 cells (about 6 seconds at 4800 baud) |
 | `{"x": true}` | restart the tuner |
+| `{"ESP32": ...}` | ignored: meant for an [ESP32 bridge](#esp32-bridge), which answers it itself. atutop asks every link once, so the tuner stays quiet when there is no bridge |
 
 A tune waits for carrier for up to about a minute. While it waits, the
 tuner still answers `Status` and `Raw` (and `s`). `{"Reset": true}` or
@@ -240,8 +250,9 @@ on, are handled when the tune has finished.
 
 Hex addresses. Values are entered as they read: 15 means 15, 13 means 1.3
 for an SWR (N7DDC calls this "hexadecimal" but it is BCD). Defaults are
-N7DDC's, except where noted. Change them with the front panel where
-N7DDC provides it, with `{"Set": ...}`, with `atu100.py -c s`, or in
+N7DDC's, except where noted. Change them in atutop's
+[ATU-100 settings](#atu-100-settings), with the front panel where N7DDC
+provides it, with `{"Set": ...}`, with `atu100.py -c s`, or in
 `atu100diagnostics.py`.
 
 | Cell | Setting | Default |
@@ -306,26 +317,35 @@ cell 36: `atu100.py --search original` and `--search grid`.
 
 ## atutop
 
-A terminal program in the style of btop, written in Rust: one file, no
-Python needed.
+A program in the style of btop, written in Rust: one file, no Python
+needed. It runs in a terminal, and the same program runs in a web browser
+served by the ESP32 bridge ([below](#atutop-in-a-web-browser)).
 
 ![atutop](docs/atutop.png)
 
 - **power**: transmitter power, antenna power and efficiency, a gradient
-  meter and a five-minute history graph. The scale follows the peak.
+  meter and a five-minute history graph. The scale follows the detector
+  winding (0–100 W, or 0–40 W for 1:5) with the HighPower limit marked, or
+  the peak in high power mode. The box flashes **HIGH POWER** on the alarm.
 - **swr**: SWR with a meter from 1.0 to 3.0, the HighSWR limit marked on it,
-  and its history. The box flashes red on a HighSWR alarm.
+  and its history. The box flashes **HIGH SWR** on the alarm. Under 1 W it
+  says "not measured": N7DDC's firmware measures the SWR from 1 W up.
 - **tuner**: inductance, capacitance, capacitor side, detector voltages,
-  auto, bypass, the tuning search and the HighSWR limit.
+  auto, bypass, the tuning search, the HighSWR limit (− and + buttons),
+  "Tunes from" and the detector winding.
 - **relays**: every inductor and capacitor; lit ones are switched in.
   **Click one to switch it**, click the LC/CL chip to move the capacitors.
-- **events**: tunes, resets, alarms, with times.
+- **events**: tunes, resets, alarms, the link, with times.
 - While tuning, the power box shows **TUNING · transmit a carrier**.
 
-Mouse: click the buttons at the bottom, the relays, Auto, Bypass, Search or
-Detector; the scroll wheel on HighSWR changes the limit. Keys: `t` tune,
-`b` bypass, `a` auto, `r` reset, `s` status, `v` detector voltages once a
-second, `g` tuning search, `[` `]` HighSWR limit, `q` quit.
+Mouse: click the buttons at the bottom, the relays, Auto, Bypass, Search,
+Detector, Tunes from or Winding; the − and + buttons or the wheel on
+HighSWR change the limit. Boxes close with Esc or a click on "Esc to close
+✕" in their top right corner.
+
+Keys: `t` tune, `b` bypass, `a` auto, `r` reset, `s` status, `v` detector
+voltages once a second, `g` tuning search, `[` `]` HighSWR limit, `o`
+network settings, `e` ATU-100 settings, `c` connect screen, `q` quit.
 
 ```
 atutop                          # the connect screen ($ATU100_PORT skips it)
@@ -336,9 +356,13 @@ atutop socket://atu100.local:7000
 **Connect screen** (at start without a port, or `c`): USB serial ports
 named from their USB IDs (ESP32, Arduino, CH340...), ESP32 bridges found
 on the network (UDP broadcast to port 7001, and `atu100.local`), the ports
-used before (`~/.config/atutop/recent`), an address to type, and
-**simulator**: starts the simulated tuner and ESP32 bridge from
-`test/` so everything can be tried without hardware.
+used before (`~/.config/atutop/recent`), an address to type, and two
+ways to try everything without hardware: **simulator** starts the simulated
+tuner and ESP32 bridge from `test/`, and **simulator + phone** also opens
+the simulated bridge's web page to the home network, so a phone can try the
+browser version (see [Testing without a tuner](#testing-without-a-tuner)).
+A USB port is named from its USB vendor ID without being opened: opening a
+Mega's port restarts the Mega.
 
 **Network settings** (`o`): the link, and with an ESP32 bridge its Wi-Fi:
 scan, pick a network, password, IP address from the router or fixed
@@ -347,7 +371,7 @@ from USB to Wi-Fi without restarting. Wi-Fi settings change over USB, or
 from the bridge's own hotspot. atutop reconnects by itself when the link
 drops.
 
-**ATU-100 settings** (`e`): every EEPROM cell of [Settings](#settings-eeprom-cells),
+<a id="atu-100-settings"></a>**ATU-100 settings** (`e`): every EEPROM cell of [Settings](#settings-eeprom-cells),
 the ones a PICkit would set, without one once this firmware is in:
 tuning, power and detector, display, relays, and the value of each
 inductor and capacitor. Each row shows the value in plain units and the
@@ -376,7 +400,8 @@ bridge's hotspot; checked every 10 seconds), or in yellow "not reachable
 from here" when this computer is on neither. Click it to open the page in
 the browser.
 
-It works from 80×24 up and takes the port for itself, so it and the Python
+It works from 80×24 up (narrower than about 76 columns the boxes stack, as
+on a phone) and takes the port for itself, so it and the Python
 tools cannot talk to the tuner at the same time. Commands go out one at a
 time, each after the tuner has answered the last; quick repeats of the same
 setting (a spin of the wheel) are merged into one, and quick clicks keep
@@ -398,19 +423,29 @@ tuner over a WebSocket on port 81. It is the same program, built for the
 browser with [Ratzilla](https://github.com/ratatui/ratzilla): every
 feature added to atutop is in both.
 
+<img src="docs/atutop-phone.png" alt="atutop on a phone" width="300" align="right">
+
 - On a phone the boxes stack (below about 76 columns) and the buttons
-  wrap onto two rows. Tap anything you would click.
-- Typing (the Wi-Fi network and password, a fixed address) uses a real
-  text box placed over the field, so the phone's own keyboard comes up.
+  wrap onto two rows. Tap anything you would click; drag the scroll bar of
+  the ATU-100 settings list.
+- Every field you type in (the Wi-Fi network and password, an address, an
+  ATU-100 setting) has a real text box over it, so the phone's own keyboard
+  comes up, and it stays up when the keyboard covers part of the screen.
 - From the bridge's hotspot the Wi-Fi settings can be changed, as over
   USB; from the home network they cannot.
 - No quit, connect screen or web link in the browser: the page talks to
   the bridge it came from.
+- A plain page without atutop is at `/lite`.
+
+<br clear="right">
 
 Build: `cd tui && trunk build --release` (`cargo install trunk` and
 `rustup target add wasm32-unknown-unknown` once), giving `tui/dist`;
 `esp32/build.sh` builds it, packs it into the bridge firmware and compiles
-the firmware.
+the firmware. Ratzilla is taken from a commit after its 0.3.1 release,
+which sized the screen wrongly; atutop listens for keys and clicks on the
+whole page itself, because Ratzilla's own listeners stop working after the
+window is resized.
 
 ## Python tools
 
@@ -487,7 +522,7 @@ Inductance:  0 nH
 
 Keys: `t` tune, `b` bypass, `a` auto, `r` reset, `s` status, `v` detector
 voltages once a second on/off, `q` quit. Double click Auto, Bypass or Tune
-to do the same. HighSWR and the SWR show in red.
+to do the same. HighSWR, HighPower and the SWR show in red.
 
 ### atu100diagnostics.py
 
@@ -559,8 +594,10 @@ It sits between the tuner and everything else:
 - Lines are passed whole: messages from different sides never mix.
 - Its own messages carry an `"ESP32"` field and never reach the tuner (the
   tuner ignores them, so atutop's probe is harmless without a bridge):
-  `Info`, `Scan`, `WiFi`, `Forget`, answered with `Info`, `Net` lines and
-  `Scan`, `OK` or `Error`. `test/esp32_sim.py` does the same on a PC.
+  `Info`, `Scan`, `WiFi`, `Forget`, `Hotspot` (always on or not), answered
+  with `Info`, `Net` lines and `Scan`, `OK` or `Error`; and `Find` on UDP
+  port 7001, answered with `Here`. `test/esp32_sim.py` does the same on a
+  PC and is the reference for the messages.
 - **Its own hotspot**, **ATU100-setup**, password **hamradio**, address
   **192.168.73.1**: comes up when no network is saved or the saved one
   cannot be joined for 20 seconds, and everything works on it (the web
@@ -569,13 +606,15 @@ It sits between the tuner and everything else:
   its setup page, `http://192.168.73.1/setup`. Without anyone on the
   hotspot it tries the saved network every 30 seconds; it closes the
   hotspot half a minute after joining, unless it is set to **always on**
-  (atutop's settings, over USB).
+  (atutop's network settings, over USB or from the hotspot). Change the
+  password in the firmware (`HOTSPOT_PASS`) if others nearby might have
+  read this manual.
 - The hotspot and the home network share one radio, so the hotspot uses
   the home network's channel: when the bridge joins a network, anything on
   the hotspot drops for a moment and reconnects. That is why it does not
   try the network while someone is on the hotspot.
 - **Wi-Fi settings change over USB, or from the bridge's own hotspot**
-  (atutop's settings, in the terminal or the browser, or the setup page):
+  (atutop's network settings, in the terminal or the browser, or the setup page):
   someone close by. Not from the home network. IP address from the router,
   or fixed.
 
@@ -605,6 +644,10 @@ The MPLAB X project in the same folder also works.
 The firmware uses 15376 of 16384 program words (94%) and 662 of 1024
 bytes of RAM.
 
+atutop: [see above](#atutop) (`cd tui && cargo build --release`; the
+browser version with `trunk build --release`). The ESP32 bridge:
+[`esp32/build.sh`](#esp32-bridge).
+
 ## Testing without a tuner
 
 In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
@@ -623,6 +666,8 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
 - `./python_tools.sh` runs the simulated tuner on a pseudo terminal in real
   time and drives the Python tools against it, including a settings backup
   and restore.
+- `cd tui && cargo test` checks atutop's conversions of the settings to
+  the bytes a PICkit would write (1.3 → `13`, 1000 nH → `10 00`).
 - `PTY=1 ./host_test` alone gives a simulated tuner on a pseudo terminal
   for trying anything by hand, atutop included; the port name is printed.
   Add `RF_WAVE=1` for a speech-like carrier instead of a steady one.
@@ -634,7 +679,8 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   the home network too, so a phone on the same network can open
   `http://THIS_COMPUTER:8080/`; the firewall must let 8080 and 8081 in,
   e.g. `sudo ufw allow from 192.168.88.0/24 to any port 8080:8081 proto tcp`.
-  atutop's connect screen starts both: **simulator**.
+  atutop's connect screen starts both: **simulator**, or **simulator +
+  phone** for the home network.
 
 The simulator cannot check the real I2C display timing, the interrupt's
 share of the CPU, or RF in the box.
@@ -655,19 +701,30 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938`:
 
 atutop is in `tui/src`. Shared by the terminal and the browser:
 `app.rs` (state, commands, keys, clicks), `ui.rs` (drawing), `tuner.rs`
-(the tuner's messages), `esp.rs` (the bridge's). Terminal only: `native.rs`
+(the tuner's messages), `esp.rs` (the bridge's), `cells.rs` (the EEPROM
+cells: names, units, defaults, encodings). Terminal only: `native.rs`
 (crossterm, the link, reconnecting, the simulator), `link.rs` (serial or
 TCP), `connect.rs` (the connect screen). Browser only: `web.rs` (Ratzilla,
-the WebSocket, the phone text box); `index.html`.
+the WebSocket, the phone text boxes); `index.html`.
+
+The ESP32 bridge is `esp32/atu100_bridge/atu100_bridge.ino`, with
+`esp32/make_web_files.py` and `esp32/build.sh`; its simulator is
+`ATU_100_EXT_board/FirmWare_PIC16F1938/test/esp32_sim.py`.
 
 ## Limitations and ideas
 
-- Tested only in the simulator so far.
+- Tested only in the simulator so far: the tuner firmware, the ESP32 bridge,
+  and atutop against them. The browser version has been tried on a real
+  phone (Android) against the simulated bridge.
 - Relay settling and other software delays run about 20% longer than set,
   because the serial interrupt takes part of the CPU. Harmless; could be
   made exact from the timer.
 - The tuner has no frequency counter, so per-band memories belong in the
   Arduino or ESP32 (restore with `RelayI`/`RelayC`).
+- The ESP32 bridge's web page and port 7000 have no password: anyone on the
+  network (or on the hotspot, whose password is in this manual) can use
+  the tuner, though Wi-Fi settings change only over USB or from the
+  hotspot.
 - ukoda's clean-up note still applies: much of the code uses `char` as a
   boolean and `&`/`|` between conditions, so changing those needs care.
 
@@ -692,6 +749,7 @@ Each project started from the one before it:
 6. **[randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote)**,
    branch `display-buttons-uart` (this): Randal Warren, VE7NHW. Display and
    buttons back (WA1RCT's XC8 display code), serial on the Tx_req pins,
-   the log grid tuning search, HighSWR, detector readings, live settings,
-   bug fixes, atutop, the updated Python tools, the Arduino sketch and the
-   simulator.
+   the log grid tuning search, HighSWR and HighPower alarms, detector
+   readings, live settings, bug fixes, atutop (terminal and browser), the
+   ESP32 bridge, the updated Python tools, the Arduino sketch and the
+   simulators.
