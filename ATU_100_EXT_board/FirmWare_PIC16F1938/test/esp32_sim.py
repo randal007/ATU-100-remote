@@ -8,6 +8,11 @@ This makes the bridge's "USB" port, a pseudo terminal linked at USB_LINK
 (default /tmp/atu100-esp32), and once "connected" to Wi-Fi a TCP bridge on
 127.0.0.1:7000, which stands in for the ESP32's address on the network.
 
+It also serves atutop's browser version (tui/dist, built with trunk) on its
+web port, with a WebSocket for the tuner lines, as the real bridge does on
+port 81; a browser counts as on the bridge's hotspot (allowed to change the
+Wi-Fi settings) until the bridge has joined a network.
+
 It behaves as the real bridge firmware does (README.md, "ESP32 bridge"):
 lines are passed whole between the tuner and every client; lines with an
 "ESP32" field are answered here and never reach the tuner; Wi-Fi settings
@@ -21,8 +26,11 @@ When atutop goes (even without quitting properly) this stops the tuner,
 removes USB_LINK and ends.
 """
 
+import base64
+import hashlib
 import html
 import http.server
+import struct
 import json
 import os
 import threading
@@ -71,6 +79,72 @@ class Client:
             pass
 
 
+WEB_DIR = os.environ.get('ATU100_WEB_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                       '../../../tui/dist'))
+
+
+class WsClient(Client):
+    """A browser on the WebSocket: RFC 6455 text frames, one or more lines each"""
+    def __init__(self, sock):
+        super().__init__('WebSocket', sock=sock)
+        self.raw = b''
+        self.open = False
+
+    def send(self, data):
+        if not self.open:
+            return
+        n = len(data)
+        head = bytes([0x81]) + (bytes([n]) if n < 126 else
+                                bytes([126]) + struct.pack('>H', n) if n < 65536 else
+                                bytes([127]) + struct.pack('>Q', n))
+        try:
+            self.sock.sendall(head + data)
+        except OSError:
+            pass
+
+    def feed(self, data):
+        """Bytes from the socket; returns the text received, or None when it closed"""
+        self.raw += data
+        if not self.open:
+            if b'\r\n\r\n' not in self.raw:
+                return b''
+            head, self.raw = self.raw.split(b'\r\n\r\n', 1)
+            key = next((l.split(b':', 1)[1].strip() for l in head.split(b'\r\n')
+                        if l.lower().startswith(b'sec-websocket-key:')), None)
+            if key is None:
+                return None
+            accept = base64.b64encode(hashlib.sha1(key + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
+            self.sock.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
+                              b'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
+            self.open = True
+        text = b''
+        while len(self.raw) >= 2:
+            op, ln = self.raw[0] & 15, self.raw[1] & 127
+            pos = 2
+            if ln == 126:
+                if len(self.raw) < 4:
+                    break
+                ln, pos = struct.unpack('>H', self.raw[2:4])[0], 4
+            elif ln == 127:
+                if len(self.raw) < 10:
+                    break
+                ln, pos = struct.unpack('>Q', self.raw[2:10])[0], 10
+            masked = self.raw[1] & 128
+            if len(self.raw) < pos + (4 if masked else 0) + ln:
+                break
+            mask = self.raw[pos:pos + 4] if masked else b'\0\0\0\0'
+            pos += 4 if masked else 0
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(self.raw[pos:pos + ln]))
+            self.raw = self.raw[pos + ln:]
+            if op == 8:
+                return None  # close
+            if op == 9:  # ping
+                self.sock.sendall(bytes([0x8A, len(payload)]) + payload)
+            elif op in (0, 1):
+                text += payload
+        return text
+
+
 class Bridge:
     def __init__(self, tuner_path, usb_link, watch=None):
         self.usb_link, self.watch, self.parent = usb_link, watch, os.getppid()
@@ -84,6 +158,7 @@ class Bridge:
         master, slave = pty.openpty()
         raw(slave)
         self.usb_far = slave
+        os.set_blocking(master, False)  # nobody reading the USB port must not stop the bridge
         self.usb = Client('USB', fd=master)
         self.sel.register(master, selectors.EVENT_READ, self.usb)
         path = os.ttyname(slave)
@@ -102,6 +177,13 @@ class Bridge:
                 continue
         self.server.listen(2)
         self.last_status = ''
+        self.ws_server = socket.socket()
+        self.ws_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.ws_server.bind(('127.0.0.1', 0))
+        self.ws_server.listen(4)
+        self.ws_server.setblocking(False)
+        self.ws_port = self.ws_server.getsockname()[1]
+        self.ws_clients = []
         self.web = http.server.ThreadingHTTPServer(('127.0.0.1', 0), self.page_handler())
         self.web_port = self.web.server_address[1]
         threading.Thread(target=self.web.serve_forever, daemon=True).start()
@@ -114,6 +196,7 @@ class Bridge:
         print(f'USB port: {path} (linked at {usb_link}), bridge port {self.port}, web page port {self.web_port}', flush=True)
         self.server.setblocking(False)
         self.sel.register(self.server, selectors.EVENT_READ, 'server')
+        self.sel.register(self.ws_server, selectors.EVENT_READ, 'ws_server')
         self.wifi_clients = []
 
         self.finder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -161,8 +244,25 @@ class Bridge:
     def page_handler(bridge):
         """The bridge's web page, a stand-in for the real one: the tuner's
         latest status, refreshed every two seconds"""
+        types = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
+                 '.wasm': 'application/wasm', '.css': 'text/css'}
+
         class Page(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                # atutop's browser version, when it has been built
+                name = 'index.html' if self.path in ('/', '/index.html') else self.path.lstrip('/').split('?')[0]
+                path = os.path.realpath(os.path.join(WEB_DIR, name))
+                if self.path != '/lite' and path.startswith(os.path.realpath(WEB_DIR)) and os.path.isfile(path):
+                    with open(path, 'rb') as f:
+                        body = f.read()
+                    if name == 'index.html':  # tell the page where the WebSocket is
+                        body = body.replace(b'</head>', f'<script>window.ATU_WS_PORT={bridge.ws_port}</script></head>'.encode())
+                    self.send_response(200)
+                    self.send_header('Content-Type', types.get(os.path.splitext(name)[1], 'application/octet-stream'))
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 body = ('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="2">'
                         '<title>ATU-100 bridge (simulated)</title>'
                         '<body style="font-family:sans-serif;background:#111;color:#ddd;padding:2em">'
@@ -179,6 +279,15 @@ class Bridge:
             def log_message(self, *args):
                 pass
         return Page
+
+    def client_name(self, client):
+        """What the bridge calls a client: a browser is on the hotspot until
+        the bridge has joined a network"""
+        if client is self.usb:
+            return 'USB'
+        if isinstance(client, WsClient) and self.state != 'Connected':
+            return 'Hotspot'
+        return 'WiFi'
 
     def reply(self, client, msg):
         client.send((json.dumps(msg, separators=(',', ':')) + '\n').encode())
@@ -205,11 +314,11 @@ class Bridge:
         cmd = msg.get('ESP32')
         print(f'{client.name} asks {cmd}', flush=True)
         if cmd == 'Info':
-            self.reply(client, dict(self.info(), Client=client.name))
+            self.reply(client, dict(self.info(), Client=self.client_name(client)))
         elif cmd == 'Scan':
             self.scan_due.append((client, time.time() + 1.5))
-        elif cmd in ('WiFi', 'Forget', 'Hotspot') and client is not self.usb:
-            self.reply(client, {'ESP32': 'Error', 'Text': 'Wi-Fi settings change over USB only'})
+        elif cmd in ('WiFi', 'Forget', 'Hotspot') and self.client_name(client) not in ('USB', 'Hotspot'):
+            self.reply(client, {'ESP32': 'Error', 'Text': 'Wi-Fi settings change over USB or the hotspot only'})
         elif cmd == 'WiFi':
             ssid = str(msg.get('SSID', ''))
             if not ssid:
@@ -265,7 +374,7 @@ class Bridge:
             line, self.tuner_buf = self.tuner_buf.split(b'\n', 1)
             if b'"SWR"' in line:
                 self.last_status = line.decode(errors='replace')
-            for c in [self.usb] + self.wifi_clients:
+            for c in [self.usb] + self.wifi_clients + self.ws_clients:
                 c.send(line + b'\n')
 
     def drop(self, c):
@@ -299,6 +408,25 @@ class Bridge:
                     self.wifi_clients.append(c)
                     self.sel.register(sock, selectors.EVENT_READ, c)
                     print(f'Wi-Fi client from {addr[0]}', flush=True)
+                elif what == 'ws_server':
+                    sock, addr = self.ws_server.accept()
+                    c = WsClient(sock)
+                    self.ws_clients.append(c)
+                    self.sel.register(sock, selectors.EVENT_READ, c)
+                    print(f'browser from {addr[0]}', flush=True)
+                elif isinstance(what, WsClient):
+                    try:
+                        data = what.sock.recv(4096)
+                    except OSError:
+                        data = b''
+                    text = what.feed(data) if data else None
+                    if text is None:
+                        self.sel.unregister(what.sock)
+                        what.sock.close()
+                        self.ws_clients.remove(what)
+                        print('browser gone', flush=True)
+                    elif text:
+                        self.from_client(what, text)
                 elif what is self.usb:
                     try:
                         data = os.read(self.usb.fd, 4096)

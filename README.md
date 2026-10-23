@@ -375,6 +375,29 @@ Build it with Rust (stable): `cd tui && cargo build --release`, giving
 ratatui, crossterm and serialport, which also run on Windows and macOS,
 but it has only been tried on Linux.
 
+### atutop in a web browser
+
+The ESP32 bridge serves atutop itself: open `http://atu100.local/` (or
+the bridge's address, or `http://192.168.73.1/` on its hotspot) and the
+same screen runs in the browser, on a laptop or a phone, talking to the
+tuner over a WebSocket on port 81. It is the same program, built for the
+browser with [Ratzilla](https://github.com/ratatui/ratzilla): every
+feature added to atutop is in both.
+
+- On a phone the boxes stack (below about 76 columns) and the buttons
+  wrap onto two rows. Tap anything you would click.
+- Typing (the Wi-Fi network and password, a fixed address) uses a real
+  text box placed over the field, so the phone's own keyboard comes up.
+- From the bridge's hotspot the Wi-Fi settings can be changed, as over
+  USB; from the home network they cannot.
+- No quit, connect screen or web link in the browser: the page talks to
+  the bridge it came from.
+
+Build: `cd tui && trunk build --release` (`cargo install trunk` and
+`rustup target add wasm32-unknown-unknown` once), giving `tui/dist`;
+`esp32/build.sh` builds it, packs it into the bridge firmware and compiles
+the firmware.
+
 ## Python tools
 
 In the `python` folder; they need Python 3 and pyserial
@@ -511,9 +534,11 @@ It sits between the tuner and everything else:
 - **USB**: everything passes between the USB port and the tuner, so atutop
   and the Python tools work as with a USB serial adapter.
 - **Wi-Fi**: the same on TCP port 7000 (`socket://atu100.local:7000`, two
-  clients at a time), a web page on port 80 (SWR, power, L and C, Tune,
-  Reset, Bypass, Auto), and an answer on UDP port 7001 so atutop's connect
+  clients at a time), and an answer on UDP port 7001 so atutop's connect
   screen finds it.
+- **Web**: atutop itself at `/` (see "atutop in a web browser"), on a
+  WebSocket at port 81; a plain page at `/lite` (SWR, power, L and C, Tune,
+  Reset, Bypass, Auto); Wi-Fi setup at `/setup` on the hotspot.
 - **Mega**: a second serial port, as if the Mega were wired to the tuner;
   the Mega sketch needs no change. Only JSON lines from the Mega reach the
   tuner, so a loose wire cannot send the tuner's one-letter commands.
@@ -535,8 +560,10 @@ It sits between the tuner and everything else:
   the home network's channel: when the bridge joins a network, anything on
   the hotspot drops for a moment and reconnects. That is why it does not
   try the network while someone is on the hotspot.
-- **Wi-Fi settings change over USB only** (atutop's settings), or from the
-  hotspot's setup page. IP address from the router, or fixed.
+- **Wi-Fi settings change over USB, or from the bridge's own hotspot**
+  (atutop's settings, in the terminal or the browser, or the setup page):
+  someone close by. Not from the home network. IP address from the router,
+  or fixed.
 
 | XIAO pin | To | Note |
 |---|---|---|
@@ -546,11 +573,13 @@ It sits between the tuner and everything else:
 | D9 (GPIO8), TX | Mega RX1, pin 19 | |
 | 5V, GND | a 7805 from the tuner's 12 V; common ground | not the tuner's 78L05 |
 
-Build: `arduino-cli compile -b esp32:esp32:XIAO_ESP32S3_Plus
-esp32/atu100_bridge` with the esp32 boards package and the ArduinoJson
-library (`arduino-cli lib install ArduinoJson`). Upload over USB with
-`arduino-cli upload -b esp32:esp32:XIAO_ESP32S3_Plus -p /dev/ttyACM0
-esp32/atu100_bridge`. **Not yet tried on the board.**
+Build: `esp32/build.sh`, which builds atutop for the browser, packs it
+into `web_files.h` (`esp32/make_web_files.py`) and compiles the firmware
+with `arduino-cli` (the esp32 boards package; the ArduinoJson and
+WebSockets libraries: `arduino-cli lib install ArduinoJson WebSockets`).
+Without `web_files.h` the firmware still builds, and `/` says so. Upload
+over USB with `arduino-cli upload -b esp32:esp32:XIAO_ESP32S3_Plus -p
+/dev/ttyACM0 esp32/atu100_bridge`. **Not yet tried on the board.**
 
 ## Building
 
@@ -583,6 +612,10 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
 - `PTY=1 ./host_test` alone gives a simulated tuner on a pseudo terminal
   for trying anything by hand, atutop included; the port name is printed.
   Add `RF_WAVE=1` for a speech-like carrier instead of a steady one.
+- `./esp32_sim.py TUNER_PORT` puts a simulated ESP32 bridge in front of it
+  (USB port, TCP, the search, Wi-Fi settings, and atutop's browser version
+  with its WebSocket when `tui/dist` is built; it prints the web port).
+  atutop's connect screen starts both: **simulator**.
 
 The simulator cannot check the real I2C display timing, the interrupt's
 share of the CPU, or RF in the box.
@@ -601,8 +634,12 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938`:
 | `cross_compiler.c/.h` | pins, EEPROM cell numbers, delays, ADC, fuses |
 | `pic_init.c` | port and peripheral set-up |
 
-atutop is in `tui/src`: `link.rs` (serial or TCP), `tuner.rs` (state from
-the tuner's messages), `ui.rs` (drawing), `main.rs` (keys, mouse, commands).
+atutop is in `tui/src`. Shared by the terminal and the browser:
+`app.rs` (state, commands, keys, clicks), `ui.rs` (drawing), `tuner.rs`
+(the tuner's messages), `esp.rs` (the bridge's). Terminal only: `native.rs`
+(crossterm, the link, reconnecting, the simulator), `link.rs` (serial or
+TCP), `connect.rs` (the connect screen). Browser only: `web.rs` (Ratzilla,
+the WebSocket, the phone text box); `index.html`.
 
 ## Limitations and ideas
 

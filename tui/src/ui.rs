@@ -3,7 +3,7 @@
 
 use crate::esp::bars;
 use crate::tuner::{Kind, Tuner};
-use crate::{App, Field};
+use crate::app::{App, Field};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -201,21 +201,42 @@ fn short(v: i64, unit_small: &str, unit_big: &str) -> String {
     }
 }
 
+/// Narrower than this, the boxes stack one above the other (a phone)
+const NARROW: u16 = 76;
+
 pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     let mut hits = Hits::default();
-    let [header, body, keys] = Layout::vertical([Constraint::Length(1), Constraint::Min(10), Constraint::Length(1)]).areas(f.area());
+    let narrow = f.area().width < NARROW;
+    let key_rows = if narrow { 2 } else { 1 };
+    let [header, body, keys] = Layout::vertical([Constraint::Length(1), Constraint::Min(10), Constraint::Length(key_rows)]).areas(f.area());
     draw_header(f, header, t, app, &mut hits);
-    let top_h = (body.height / 2).max(9);
-    let [top, bottom] = Layout::vertical([Constraint::Length(top_h), Constraint::Min(8)]).areas(body);
-    let [power, swr] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
-    draw_power(f, power, t, app);
-    draw_swr(f, swr, t, app);
-    let tuner_w = 36.min(bottom.width / 2);
-    let [tuner, right] = Layout::horizontal([Constraint::Length(tuner_w), Constraint::Min(30)]).areas(bottom);
-    draw_tuner(f, tuner, t, app, &mut hits);
-    let [relays, events] = Layout::vertical([Constraint::Length(6), Constraint::Min(3)]).areas(right);
-    draw_relays(f, relays, t, &mut hits);
-    draw_events(f, events, t);
+    if narrow {
+        let [power, swr, tuner, relays, events] = Layout::vertical([
+            Constraint::Length(6),
+            Constraint::Length(6),
+            Constraint::Length(13),
+            Constraint::Length(6),
+            Constraint::Min(3),
+        ])
+        .areas(body);
+        draw_power(f, power, t, app);
+        draw_swr(f, swr, t, app);
+        draw_tuner(f, tuner, t, app, &mut hits);
+        draw_relays(f, relays, t, &mut hits);
+        draw_events(f, events, t);
+    } else {
+        let top_h = (body.height / 2).max(9);
+        let [top, bottom] = Layout::vertical([Constraint::Length(top_h), Constraint::Min(8)]).areas(body);
+        let [power, swr] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
+        draw_power(f, power, t, app);
+        draw_swr(f, swr, t, app);
+        let tuner_w = 36.min(bottom.width / 2);
+        let [tuner, right] = Layout::horizontal([Constraint::Length(tuner_w), Constraint::Min(30)]).areas(bottom);
+        draw_tuner(f, tuner, t, app, &mut hits);
+        let [relays, events] = Layout::vertical([Constraint::Length(6), Constraint::Min(3)]).areas(right);
+        draw_relays(f, relays, t, &mut hits);
+        draw_events(f, events, t);
+    }
     if app.winding.is_some() {
         hits = Hits::default();
         draw_winding(f, body, t, app, &mut hits);
@@ -241,7 +262,7 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
     } else if app.settings.is_some() {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_settings(f, body, app, &mut hits);
-        let typing = app.esp.present == Some(true) && app.esp.over_usb;
+        let typing = app.esp.present == Some(true) && app.esp.may_set_wifi;
         let keys_list = [
             ("Esc", "close", Action::CloseSettings, false),
             ("Tab", "field", Action::Focus(Field::Network), false),
@@ -267,13 +288,15 @@ fn draw_header(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits)
         Span::styled(" atu", Style::new().fg(TITLE).add_modifier(Modifier::BOLD)),
         Span::styled("top", Style::new().fg(HI).add_modifier(Modifier::BOLD)),
         Span::styled("  ", Style::new()),
-        Span::styled(app.port.clone(), Style::new().fg(GRAPH_TEXT)),
-        Span::raw("  "),
-        dot,
-        state,
     ];
+    if area.width >= NARROW {
+        left.push(Span::styled(app.port.clone(), Style::new().fg(GRAPH_TEXT))); // a phone has no room for it
+        left.push(Span::raw("  "));
+    }
+    left.push(dot);
+    left.push(state);
     // the ESP32 bridge's web page: click to open it in the browser
-    if app.esp.present == Some(true) {
+    if app.esp.present == Some(true) && !app.in_browser {
         let start = Line::from(left.clone()).width() as u16 + 2;
         let urls = app.esp.web_urls();
         let short = |u: &str| u.trim_start_matches("http://").trim_end_matches('/').to_string();
@@ -450,7 +473,8 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         Some(a) => value(format!("SWR {a:.1}")),
         None => value("off".into()),
     };
-    lines.push((Line::from(vec![label("HighSWR", w), alarm, dim("  [ ] or wheel")]), None));
+    let alarm_w = Line::from(alarm.clone()).width() as u16;
+    lines.push((Line::from(vec![label("HighSWR", w), alarm, Span::raw("  "), Span::styled(" − ", Style::new().fg(TITLE).bg(DIV)), Span::raw(" "), Span::styled(" + ", Style::new().fg(TITLE).bg(DIV))]), None));
     match t.min_power() {
         Some(p) => lines.push((Line::from(vec![label("Tunes from", w), value(format!("{p} W")), dim("  click: 1 W / 5 W")]), Some(Action::MinToggle))),
         None => lines.push((Line::from(vec![label("Tunes from", w), dim("…")]), None)),
@@ -471,6 +495,10 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
         }
         if i == 8 {
             hits.alarm_row = Some(row);
+            // the − and + buttons after the value
+            let x = row.x + 1 + w as u16 + alarm_w + 2;
+            hits.areas.push((Rect { x, y: row.y, width: 3, height: 1 }, Action::AlarmDown));
+            hits.areas.push((Rect { x: x + 4, y: row.y, width: 3, height: 1 }, Action::AlarmUp));
         }
         f.render_widget(Paragraph::new(line), row);
     }
@@ -553,27 +581,53 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         ("o", "settings", Action::Settings, false),
         ("q", "quit", Action::Quit, false),
     ];
+    if app.in_browser {
+        keys.retain(|k| k.2 != Action::Quit);
+    }
     // On a narrow terminal leave out the buttons least needed (their keys
     // still work) so settings and quit always show
-    let width = |k: &[(&str, &str, Action, bool)]| k.iter().map(|(k, n, _, _)| k.chars().count() + n.len() + 3).sum::<usize>();
-    for drop in [Action::Status, Action::Search, Action::Detector] {
-        if width(&keys) > area.width as usize {
+    for drop in [Action::Status, Action::Search, Action::Detector, Action::Reset] {
+        if !keys_fit(&keys, area) {
             keys.retain(|k| k.2 != drop);
         }
     }
     draw_key_list(f, area, &keys, hits);
 }
 
+/// Do the buttons fit on the rows, wrapped as draw_key_list does?
+fn keys_fit_gap(keys: &[(&str, &str, Action, bool)], area: Rect, gap: u16) -> bool {
+    let (mut x, mut rows) = (gap, 1u16);
+    for (k, n, _, _) in keys {
+        let w = (k.chars().count() + n.len() + 3) as u16;
+        if x + w > area.width {
+            rows += 1;
+            x = gap;
+        }
+        x += w + gap;
+    }
+    rows <= area.height
+}
+
+fn keys_fit(keys: &[(&str, &str, Action, bool)], area: Rect) -> bool {
+    keys_fit_gap(keys, area, 0)
+}
+
 fn draw_key_list(f: &mut Frame, area: Rect, keys: &[(&str, &str, Action, bool)], hits: &mut Hits) {
     // a gap between buttons when there is room for it
-    let total: usize = keys.iter().map(|(k, n, _, _)| k.chars().count() + n.len() + 3).sum();
-    let gap = if total + keys.len() + 1 <= area.width as usize { 1 } else { 0 };
+    let gap = if keys_fit_gap(keys, area, 1) { 1 } else { 0 };
     let mut x = area.x + gap;
+    let mut y = area.y;
     for &(key, name, action, active) in keys {
         let width = (key.chars().count() + name.len() + 3) as u16;
         if x + width > area.x + area.width {
-            break;
+            // on to the next row, if there is one
+            if y + 1 >= area.y + area.height {
+                break;
+            }
+            y += 1;
+            x = area.x + gap;
         }
+        let area = Rect { y, ..area };
         let bg = if active { ON_BG } else { DIV };
         let buf = f.buffer_mut();
         buf.set_string(x, area.y, " ", Style::new().bg(bg));
@@ -601,14 +655,14 @@ fn button(buf: &mut Buffer, x: u16, y: u16, text: &str, action: Action, on: bool
 fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     let Some(set) = &app.settings else { return };
     let esp = &app.esp;
-    let usb = esp.present == Some(true) && esp.over_usb;
+    let usb = esp.present == Some(true) && esp.may_set_wifi;
     let nets = if usb { esp.networks.len().min(6) as u16 } else { 0 };
     let want_h = match esp.present {
-        Some(true) if usb => 17 + nets.max(1) + if set.fixed { 3 } else { 0 },
+        Some(true) if usb => 17 + nets.max(1) + if set.fixed { 3 } else { 0 } + (body.width < 64) as u16,
         Some(true) => 13,
         _ => 10,
     };
-    let w = body.width.saturating_sub(4).min(74);
+    let w = body.width.saturating_sub(2).min(74);
     let h = body.height.min(want_h);
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
     f.render_widget(Clear, area);
@@ -635,14 +689,17 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
 
     let how = match (esp.present, esp.over_usb, app.port.starts_with("socket://")) {
         (Some(true), true, _) => "USB to the ESP32 bridge",
+        (Some(true), false, _) if esp.may_set_wifi => "the ESP32 bridge's own hotspot",
         (Some(true), false, _) => "Wi-Fi to the ESP32 bridge",
         (None, _, _) => "looking for an ESP32 bridge…",
         (Some(false), _, true) => "network, no ESP32 bridge",
         (Some(false), _, false) => "straight to the tuner, or through the Mega",
     };
     put(buf, y, vec![label("Link", lw), value(app.port.clone()), dim(format!("  {how}"))]);
-    let bw = " change ".chars().count() as u16;
-    button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "change", Action::ChangeLink, true, hits);
+    if !app.in_browser {
+        let bw = " change ".chars().count() as u16;
+        button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "change", Action::ChangeLink, true, hits);
+    }
     y += 1;
     if esp.present == Some(true) {
         put(buf, y, vec![label("ESP32", lw), value(format!("bridge {}", esp.version))]);
@@ -688,7 +745,7 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         let how = if esp.static_ip.is_empty() { "from the router" } else { "fixed" };
         let host = if esp.host.is_empty() { format!("  {how}") } else { format!("  {how} · {}", esp.host) };
         put(buf, y, vec![label("Address", lw), value(addr), dim(host)]);
-        if usb && y < bottom {
+        if esp.over_usb && !app.in_browser && y < bottom {
             let bw = " use Wi-Fi ".chars().count() as u16;
             button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, "use Wi-Fi", Action::UseWifi, true, hits);
         }
@@ -704,15 +761,25 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     if usb && y < bottom {
         let text = if esp.hotspot_always { "● always on" } else { "○ always on" };
         let bw = text.chars().count() as u16 + 2;
-        button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, text, Action::HotspotAlways, true, hits);
+        if inner.width < 60 {
+            // a phone: on a row of its own, under the hotspot
+            y += 1;
+            if y < bottom {
+                button(buf, inner.x + 1 + lw as u16, y, text, Action::HotspotAlways, true, hits);
+            }
+        } else {
+            button(buf, (inner.x + inner.width).saturating_sub(bw + 1), y, text, Action::HotspotAlways, true, hits);
+        }
     }
     y += 1;
     rule(buf, y);
     y += 1;
 
     if !usb {
-        put(buf, y, vec![dim(" Wi-Fi settings change over USB only: connect with the USB cable".into())]);
-        put(buf, y + 1, vec![dim(" to choose another network.".into())]);
+        let note = format!("Wi-Fi settings change over USB, or from the bridge's own hotspot ({}): connect that way to choose another network.", esp.hotspot_name);
+        for (i, line) in wrap(&note, inner.width.saturating_sub(2) as usize).into_iter().enumerate() {
+            put(buf, y + i as u16, vec![dim(format!(" {line}"))]);
+        }
         return;
     }
 
@@ -756,7 +823,7 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     y += 1;
 
     // The fields: network, password, and the address
-    let field_w = 32u16;
+    let field_w = 32u16.min(inner.width.saturating_sub(lw as u16 + 10)); // narrower on a phone, "show" still beside it
     let x0 = inner.x + 1 + lw as u16;
     let field_row = |buf: &mut Buffer, y: u16, name: &str, text: String, field: Field, hits: &mut Hits| {
         if y >= bottom {
@@ -907,8 +974,8 @@ fn draw_connect(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
 /// asked for in a box that says what goes wrong otherwise
 fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
     let Some(d) = &app.winding else { return };
-    let w = body.width.saturating_sub(4).min(76);
-    let h = body.height.min(19);
+    let w = body.width.saturating_sub(2).min(76);
+    let h = body.height.min(if w < 70 { 27 } else { 19 });
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
     f.render_widget(Clear, area);
     let block = boxed("⁷", "detector winding", RED).title(corner("Esc to cancel".into(), RED));
@@ -917,11 +984,14 @@ fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits
     let buf = f.buffer_mut();
     let bottom = inner.y + inner.height;
     let mut y = inner.y;
+    let tw = inner.width.saturating_sub(2) as usize;
     let text = |buf: &mut Buffer, y: &mut u16, s: &str, c: Color| {
-        if *y < bottom {
-            buf.set_string(inner.x + 1, *y, s, Style::new().fg(c));
+        for line in wrap(s, tw) {
+            if *y < bottom {
+                buf.set_string(inner.x + 1, *y, line, Style::new().fg(c));
+            }
+            *y += 1;
         }
-        *y += 1;
     };
     text(buf, &mut y, "How is the tandem match (the SWR detector's transformer) wound?", TITLE);
     let now = t.winding().map(|k| format!("The tuner is set for 1:{k} now.")).unwrap_or_default();
@@ -931,6 +1001,7 @@ fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits
         (10, "1:10  stock", "5 to 100 W, alarm above 100 W, tunes from 5 W"),
         (5, "1:5   low power", "1 to 40 W, alarm above 35 W, tunes from 1 W"),
     ];
+    let side = tw >= 66; // room for the description beside the choice
     for (k, name, what) in choices {
         if y >= bottom {
             break;
@@ -939,18 +1010,20 @@ fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits
         let style = if on { Style::new().fg(TITLE).bg(ON_BG).add_modifier(Modifier::BOLD) } else { Style::new().fg(MAIN_FG).bg(DIV) };
         let chip = format!(" {} {name:<16}", if on { "●" } else { "○" });
         buf.set_string(inner.x + 2, y, &chip, style);
-        buf.set_string(inner.x + 3 + chip.chars().count() as u16, y, what, Style::new().fg(GRAPH_TEXT));
-        hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Action::WindingChoose(k)));
-        y += 1;
+        let rows = if side { 1 } else { 2 };
+        hits.areas.push((Rect { x: inner.x, y, width: inner.width, height: rows }, Action::WindingChoose(k)));
+        if side {
+            buf.set_string(inner.x + 3 + chip.chars().count() as u16, y, what, Style::new().fg(GRAPH_TEXT));
+        } else if y + 1 < bottom {
+            buf.set_stringn(inner.x + 4, y + 1, what, tw.saturating_sub(3), Style::new().fg(GRAPH_TEXT));
+        }
+        y += rows;
     }
     y += 1;
-    text(buf, &mut y, "This must match how the transformer is really wound. If it does not,", YELLOW);
-    text(buf, &mut y, "every power and SWR reading is wrong, and so is the tuning.", YELLOW);
+    text(buf, &mut y, "This must match how the transformer is really wound. If it does not, every power and SWR reading is wrong, and so is the tuning.", YELLOW);
     if d.choice == 5 {
         y += 1;
-        text(buf, &mut y, "With the 1:5 winding the detector overloads above about 40 W:", RED);
-        text(buf, &mut y, "keep the transmitter at 35 W or less. The board takes 100 W only", RED);
-        text(buf, &mut y, "with the stock 1:10 winding.", RED);
+        text(buf, &mut y, "With the 1:5 winding the detector overloads above about 40 W: keep the transmitter at 35 W or less. The board takes 100 W only with the stock 1:10 winding.", RED);
     }
     y += 1;
     if y < bottom {
@@ -965,4 +1038,23 @@ fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits
         let aw = button(buf, x, y, "apply", Action::WindingApply, true, hits);
         button(buf, x + aw + 2, y, "cancel", Action::WindingCancel, true, hits);
     }
+}
+
+/// Words into lines of at most `width` characters
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![];
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use std::collections::VecDeque;
-use std::time::Instant;
+use web_time::Instant;
 
 pub const HISTORY: usize = 600; // samples, one every 0.5 s: five minutes
 

@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub const FIND_PORT: u16 = 7001; // the bridges answer {"ESP32":"Find"} here
 const BRIDGE_PORT: u16 = 7000;
@@ -58,7 +59,9 @@ fn usb_what(vid: u16, product: Option<&str>) -> String {
 }
 
 pub fn usb_ports() -> Vec<Entry> {
-    let mut list = vec![];
+    #[allow(unused_mut)]
+    let mut list: Vec<Entry> = vec![];
+    #[cfg(not(target_arch = "wasm32"))] // the browser version has no ports
     if let Ok(ports) = serialport::available_ports() {
         for p in ports {
             if let serialport::SerialPortType::UsbPort(u) = &p.port_type {

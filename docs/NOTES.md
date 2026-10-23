@@ -146,7 +146,22 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    (the shared radio would move channel and drop it); mDNS from power-up;
    Info reports Web true on the hotspot and HotspotIP. Done in firmware,
    simulator and atutop.
-   **Next: the web version of atutop** (he likes the plan): split tui/
+   **Web version of atutop: done 2026-10-23.** tui/ split: app.rs (shared
+   Core: state, Outbox, keys/clicks -> Action -> Effect), ui.rs (narrow
+   stacked layout under 76 cols, wrapping key bar, HighSWR -/+ buttons),
+   native.rs (terminal), web.rs (Ratzilla DomBackend, WebSocket to port 81,
+   <input> overlay focused on the click event so phones get a keyboard).
+   Ratzilla pinned to git rev 2f6f7ef: 0.3.1's DomBackend::size() guesses
+   (window/10 x /20) instead of its measured grid; move to a release that
+   has the fix. Bridge: WebSocketsServer on 81, atutop files gzipped into
+   web_files.h (esp32/make_web_files.py, esp32/build.sh; gitignored, ~230
+   KB gz; firmware 57% of 2 MB), plain page moved to /lite. Clients on the
+   hotspot subnet (TCP or WebSocket) may change Wi-Fi ("Client":"Hotspot").
+   Simulator serves tui/dist + a WebSocket; a browser counts as on the
+   hotspot until the bridge joins a network. Tested with puppeteer
+   (gods-eye-view's node_modules) driving chromium, desktop and phone
+   (Pixel UA, 412x915): live data, settings, real input focused, Wi-Fi set.
+   Was the plan: split tui/
    into a shared crate (ui.rs, tuner.rs, esp.rs, outbox, actions) and two
    shells, terminal and Ratzilla (ratatui/ratzilla 0.3.1, same ratatui
    0.30, mouse events with grid positions). ESP32: WebSocket that passes

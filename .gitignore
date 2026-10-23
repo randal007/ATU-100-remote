@@ -5,3 +5,5 @@ python/__pycache__
 
 esp32/build/
 esp32/*/build/
+tui/dist/
+esp32/atu100_bridge/web_files.h

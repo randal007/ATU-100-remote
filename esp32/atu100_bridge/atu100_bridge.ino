@@ -4,8 +4,12 @@
     - USB: everything passes between the USB port and the tuner, so atutop
       and the Python tools work as with a USB serial adapter.
     - Wi-Fi: the same over TCP port 7000 (socket://atu100.local:7000), up to
-      two clients; a web page on port 80; answers {"ESP32":"Find"} on UDP
-      port 7001 so atutop can find it.
+      two clients; answers {"ESP32":"Find"} on UDP port 7001 so atutop can
+      find it.
+    - atutop itself in the browser: http://atu100.local/ serves atutop's
+      browser version (packed into web_files.h by esp32/make_web_files.py),
+      which talks to the tuner over a WebSocket on port 81. A plain page is
+      at /lite, Wi-Fi setup on the hotspot at /setup.
     - An Arduino Mega on a second serial port, as if wired to the tuner.
     - Its own messages carry an "ESP32" field and never reach the tuner
       (see README.md, "ESP32 bridge"; test/esp32_sim.py does the same on a
@@ -35,7 +39,18 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <WebSocketsServer.h>
 #include <WiFiUdp.h>
+#if __has_include("web_files.h") // made by esp32/make_web_files.py (esp32/build.sh)
+#include "web_files.h"
+#else
+struct WebFile { const char *path; const char *type; const uint8_t *data; size_t size; };
+static const char NO_WEB[] PROGMEM = "atutop's browser version was not built into this firmware: run esp32/build.sh. "
+                                    "The plain page is at /lite.";
+static const WebFile WEB_FILES[] = {{"/", "text/plain", (const uint8_t *)NO_WEB, sizeof NO_WEB - 1}};
+static const size_t WEB_FILE_COUNT = 1;
+#define NO_WEB_FILES
+#endif
 
 #define VERSION "1.0"
 #define HOST "atu100" // atu100.local
@@ -45,6 +60,8 @@ const IPAddress HOTSPOT_IP(192, 168, 73, 1);
 #define BRIDGE_PORT 7000
 #define FIND_PORT 7001
 #define WEB_PORT 80
+#define WS_PORT 81
+#define MAX_WS 4
 #define TUNER_BAUD 4800
 #define TUNER_RX 44
 #define TUNER_TX 43
@@ -61,10 +78,11 @@ HardwareSerial &mega = Serial2;
 WiFiServer bridge(BRIDGE_PORT);
 WiFiClient tcp[MAX_TCP];
 WebServer web(WEB_PORT);
+WebSocketsServer wsServer(WS_PORT);
 WiFiUDP finder;
 Preferences prefs;
 
-enum Who { USB, MEGA, TCP0 }; // TCP0 + i for the TCP clients
+enum Who { USB, MEGA, TCP0, WS0 = TCP0 + MAX_TCP }; // TCP0 + i, WS0 + n for the network clients
 
 struct LineBuf {
   char buf[LINE_MAX];
@@ -90,7 +108,7 @@ struct LineBuf {
   }
 };
 
-LineBuf usbLine, megaLine, tunerLine, tcpLine[MAX_TCP];
+LineBuf usbLine, megaLine, tunerLine, tcpLine[MAX_TCP], wsLine[MAX_WS];
 
 // Wi-Fi
 enum WifiState { W_OFF, W_CONNECTING, W_CONNECTED, W_FAILED };
@@ -116,6 +134,9 @@ void sendTo(int who, const char *line) {
   } else if (who == MEGA) {
     mega.print(line);
     mega.print('\n');
+  } else if (who >= WS0) {
+    String text = String(line) + '\n';
+    wsServer.sendTXT(who - WS0, text);
   } else if (tcp[who - TCP0].connected()) {
     tcp[who - TCP0].print(line);
     tcp[who - TCP0].print('\n');
@@ -242,7 +263,31 @@ void wifiLoop() {
 
 // ------------------------------------------------- the bridge's own messages
 
-const char *whoName(int who) { return who == USB ? "USB" : who == MEGA ? "Mega" : "WiFi"; }
+// Is this address on the bridge's own hotspot?
+bool onHotspot(IPAddress ip) {
+  IPAddress m(255, 255, 255, 0);
+  return hotspot && (uint32_t(ip) & uint32_t(m)) == (uint32_t(HOTSPOT_IP) & uint32_t(m));
+}
+
+IPAddress clientIp(int who) {
+  if (who >= WS0)
+    return wsServer.remoteIP(who - WS0);
+  if (who >= TCP0)
+    return tcp[who - TCP0].remoteIP();
+  return IPAddress();
+}
+
+// USB, the Mega, or a network client on the home network or the hotspot.
+// Wi-Fi settings change over USB or from the hotspot: someone close by.
+const char *whoName(int who) {
+  if (who == USB)
+    return "USB";
+  if (who == MEGA)
+    return "Mega";
+  return onHotspot(clientIp(who)) ? "Hotspot" : "WiFi";
+}
+
+bool maySetWifi(int who) { return who == USB || (who >= TCP0 && onHotspot(clientIp(who))); }
 
 void sendInfo(int who) {
   JsonDocument d;
@@ -309,8 +354,8 @@ void command(int who, JsonDocument &doc) {
       notice(who, "Error", "scan failed");
     else
       scanFor = who;
-  } else if ((cmd == "WiFi" || cmd == "Forget" || cmd == "Hotspot") && who != USB) {
-    notice(who, "Error", "Wi-Fi settings change over USB only");
+  } else if ((cmd == "WiFi" || cmd == "Forget" || cmd == "Hotspot") && !maySetWifi(who)) {
+    notice(who, "Error", "Wi-Fi settings change over USB or the bridge's hotspot only");
   } else if (cmd == "WiFi") {
     String err = applyWifi(doc["SSID"] | "", doc["Pass"].is<const char *>(), doc["Pass"] | "",
                            doc["IP"].is<const char *>(), doc["IP"] | "", doc["Gateway"] | "",
@@ -387,6 +432,9 @@ void fromTuner(const char *line) {
   sendTo(MEGA, line);
   for (int i = 0; i < MAX_TCP; i++)
     sendTo(TCP0 + i, line);
+  for (int n = 0; n < MAX_WS; n++)
+    if (wsServer.clientIsConnected(n))
+      sendTo(WS0 + n, line);
   if (strstr(line, "\"SWR\""))
     lastStatus = line;
   if (strstr(line, "\"Event\"")) {
@@ -441,6 +489,33 @@ ev.innerHTML=r.Events.map(e=>'<div>'+(e.Event||'')+'</div>').join('');
 setup.innerHTML=r.Hotspot?'Hotspot on: <a href="/setup">Wi-Fi setup</a>':'';}catch(e){}}
 setInterval(poll,1000);poll();
 </script></body></html>)HTML";
+
+// The browser on the WebSocket: lines in text frames
+void wsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
+  if (num >= MAX_WS)
+    return;
+  if (type == WStype_CONNECTED)
+    wsLine[num].n = 0;
+  else if (type == WStype_TEXT)
+    for (size_t i = 0; i < length; i++)
+      if (wsLine[num].add(payload[i]))
+        fromClient(WS0 + num, wsLine[num].buf), wsLine[num].n = 0;
+}
+
+// atutop's browser files, gzipped in flash; anything else is not found
+void webFile() {
+  String path = web.uri();
+  for (size_t i = 0; i < WEB_FILE_COUNT; i++)
+    if (path == WEB_FILES[i].path) {
+#ifndef NO_WEB_FILES
+      web.sendHeader("Content-Encoding", "gzip");
+#endif
+      web.sendHeader("Cache-Control", path == "/" ? "no-cache" : "max-age=31536000"); // file names change with the build
+      web.send_P(200, WEB_FILES[i].type, (const char *)WEB_FILES[i].data, WEB_FILES[i].size);
+      return;
+    }
+  web.send(404, "text/plain", "not found");
+}
 
 // Requests that arrived over the bridge's own hotspot may change Wi-Fi
 bool viaHotspot() { return hotspot && web.client().localIP() == WiFi.softAPIP(); }
@@ -565,11 +640,14 @@ void setup() {
   bridge.begin();
   bridge.setNoDelay(true);
   finder.begin(FIND_PORT);
-  web.on("/", [] { web.send_P(200, "text/html", PAGE); });
+  web.on("/lite", [] { web.send_P(200, "text/html", PAGE); }); // the plain page
+  web.onNotFound(webFile); // atutop: "/" and its files
   web.on("/status", webStatus);
   web.on("/cmd", HTTP_POST, webCommand);
   web.on("/setup", webSetup);
   web.begin();
+  wsServer.begin();
+  wsServer.onEvent(wsEvent);
 }
 
 void loop() {
@@ -629,4 +707,5 @@ void loop() {
   wifiLoop();
   scanLoop();
   web.handleClient();
+  wsServer.loop();
 }

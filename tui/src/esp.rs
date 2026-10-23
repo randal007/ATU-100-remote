@@ -3,7 +3,8 @@
 //! them to the tuner. Without a bridge the tuner ignores them.
 
 use serde_json::{Map, Value};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub struct Net {
     pub ssid: String,
@@ -18,6 +19,9 @@ pub struct Esp {
     probed_at: Option<Instant>,
     pub version: String,
     pub over_usb: bool,
+    /// Wi-Fi settings may change from here: over USB, or from the bridge's
+    /// own hotspot
+    pub may_set_wifi: bool,
     pub wifi: String, // Off, Connecting, Connected, Failed
     pub ssid: String,
     pub ip: String,
@@ -72,6 +76,7 @@ impl Esp {
             "Info" => {
                 self.version = s("Version");
                 self.over_usb = s("Client") == "USB";
+                self.may_set_wifi = matches!(s("Client").as_str(), "USB" | "Hotspot");
                 self.wifi = s("WiFi");
                 self.ssid = s("SSID");
                 self.ip = s("IP");
