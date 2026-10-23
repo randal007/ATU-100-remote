@@ -19,6 +19,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 #include "xc.h"
@@ -229,7 +230,8 @@ static int from_pic_len, mark, framing_errors;
 static int rx_level = 1, rx_active, rx_bit, rx_byte;
 static double rx_start;
 
-static int pty = -1; // PTY=1: the serial line is also a pseudo terminal
+static int pty = -1;      // PTY=1: the serial line is also a pseudo terminal
+static int pty_side = -1; // our handle on the program's side of it
 
 static void received(char c)
 {
@@ -350,6 +352,8 @@ static void pty_tick(void)
         double s = secs();
         fwd_mv = 900 * (0.35 + 0.65 * fabs(sin(s * 1.7)) * (0.6 + 0.4 * sin(s * 0.31)));
     }
+    if (n % 20000 == 0) // every ~1 s: undo the exclusive lock a killed program left behind
+        ioctl(pty_side, TIOCNXCL);
     if (++n % 200 == 0) { // every ~10 ms
         struct timespec t;
         clock_gettime(CLOCK_MONOTONIC, &t);
@@ -696,7 +700,7 @@ int main(void)
         fcntl(pty, F_SETFL, O_NONBLOCK);
         // Raw mode, held by keeping the other side open: no echo of what
         // the tuner sends back into the tuner, no newline translation
-        int side = open(ptsname(pty), O_RDWR | O_NOCTTY);
+        int side = pty_side = open(ptsname(pty), O_RDWR | O_NOCTTY);
         struct termios tio;
         tcgetattr(side, &tio);
         cfmakeraw(&tio);
