@@ -203,6 +203,7 @@ the display-off timer (cell 32).
 | `HighSWR` | SWR at or above the limit in cell 37 with power present; sent within a few ms, again only after the SWR has dropped 0.1 below the limit or the power has gone. Not checked while tuning |
 | `Overload` | more power than the detector can measure |
 | `Error` | a command the tuner did not understand |
+| `Busy` | a command that arrived while a tune was waiting for carrier, and was not done |
 
 **Detector voltages**, answer to `{"Raw": true}`, in mV before the diode
 correction: `{"Fwd":2697,"Rev":261}`
@@ -227,9 +228,12 @@ and values.
 | `{"Dump": "EEPROM"}` | all 256 cells (about 6 seconds at 4800 baud) |
 | `{"x": true}` | restart the tuner |
 
-A tune waits for carrier for up to about a minute. Any new JSON message
-cancels the wait (the relays are reset, as with the Tune button) and is
-then handled.
+A tune waits for carrier for up to about a minute. While it waits, the
+tuner still answers `Status` and `Raw` (and `s`). `{"Reset": true}` or
+`{"Tune": true}` (or `r`, `t`) stops the tune and resets the relays, as
+the Tune button does. Any other message is not done and gets a `Busy`
+event. Messages that arrive during the search itself, once the carrier is
+on, are handled when the tune has finished.
 
 ## Settings (EEPROM cells)
 
@@ -331,7 +335,9 @@ atutop socket://atu100.local:7000
 It works from 80×24 up and takes the port for itself, so it and the Python
 tools cannot talk to the tuner at the same time. Commands go out one at a
 time, each after the tuner has answered the last; quick repeats of the same
-setting (a spin of the wheel) are merged into one. It reads the settings and
+setting (a spin of the wheel) are merged into one, and quick clicks keep
+their place even when a status line crosses them. While a tune runs only
+Reset, the status and the detector readings go out. It reads the settings and
 relay values from the tuner when it starts (about 6 seconds).
 
 Build it with Rust (stable): `cd tui && cargo build --release`, giving
@@ -477,7 +483,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 14900 of 16384 program words (91%) and 661 of 1024
+The firmware uses 15057 of 16384 program words (92%) and 662 of 1024
 bytes of RAM.
 
 ## Testing without a tuner
@@ -487,10 +493,10 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
 - `./run.sh` compiles the firmware for the PC with a stand-in for the PIC's
   registers and runs it against a simulated Arduino on the serial line
   (exact clock and 2% off either way), the buttons, an RF source and an
-  antenna behind the relay network. It makes 25 checks for each of three
-  display types (22 with the LED, which has no text to check): tuning by
+  antenna behind the relay network. It makes 29 checks for each of three
+  display types (26 with the LED, which has no text to check): tuning by
   serial and button, reset, bypass, auto, relays,
-  cancelling a tune, the EEPROM dump with a command arriving during it,
+  messages while a tune waits for carrier, the EEPROM dump with a command arriving during it,
   power fields, detector readings, the HighSWR alarm, live settings, the
   watchdog and serial framing. Then it compares the two tuning searches
   over about 1100 antenna loads.

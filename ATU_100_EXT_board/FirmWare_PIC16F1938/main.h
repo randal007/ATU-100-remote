@@ -55,6 +55,7 @@ static char e_c_tune_mode = 1;
 void pic_init(void);
 
 void tune_btn_push(void);
+char serial_during_tune(void);
 void lcd_prep(void);
 void lcd_swr(int);
 void lcd_pwr(void);
@@ -241,9 +242,9 @@ void get_swr() {
         if (Button(&PORTB, TUNE_BUTTON, 5, BUTTON_RELEASED))
             g_b_rready = 1;
 
-        // Give up after about a minute, on the Tune button, or when a new
-        // JSON message arrives (it is handled once the tune has stopped)
-        if ((timeout++ > 7200) || uart_rx_has('{') || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
+        // Give up after about a minute, on the Tune button, or on a Reset
+        // or Tune message (other messages are answered while waiting)
+        if ((timeout++ > 7200) || serial_during_tune() || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
             show_reset();
             g_i_SWR = 0;
             return;

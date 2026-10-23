@@ -660,6 +660,68 @@ void serial_proc(void)
    }
 }
 
+// While a tune waits for carrier: answer Status and Raw, stop the tune on
+// Reset or Tune (true), and answer anything else with a Busy event once
+// the message has ended
+char serial_during_tune(void)
+{
+   static char busy = 0;
+   char c;
+
+   while ((c = uart_getc()) != 0)
+   {
+      if (c == '{')
+         busy = 0;
+      json_rx_result_t result = json_rx_process(c);
+      switch (result)
+      {
+      case JRR_NOT_JSON:
+         c |= 0x20;
+         if (c == 's')
+         {
+            new_state = true;
+            send_state();
+         }
+         else if (c == 'r' | c == 't')
+            return 1;
+         break;
+
+      case JRR_BOOL:
+         if (strcmp(json_rx_name, "Reset") == 0 || strcmp(json_rx_name, "Tune") == 0)
+         {
+            busy = 0;
+            return 1;
+         }
+         if (strcmp(json_rx_name, "Status") == 0)
+         {
+            new_state = true;
+            send_state();
+         }
+         else if (strcmp(json_rx_name, "Raw") == 0)
+            send_raw();
+         else
+            busy = 1;
+         break;
+
+      case JRR_INT:
+      case JRR_STR:
+         busy = 1;
+         if (c != '}') // a number can end the message without a JRR_END
+            break;
+         // fall through
+      case JRR_END:
+         if (busy)
+            json_event("Busy");
+         busy = 0;
+         break;
+
+      default:
+         break;
+      }
+   }
+   return 0;
+}
+
 //***************** Tuner actions and display *****************
 
 void show_reset()

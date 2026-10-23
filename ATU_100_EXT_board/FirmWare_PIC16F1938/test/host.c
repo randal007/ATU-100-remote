@@ -602,18 +602,39 @@ static void scenario(void)
             timeout(3, "relay status");
         break;
 
-    case 10:
-        if (waited(2) && step_time > 0) {
-            send("{\"Status\": true}\n"); // a new message cancels the wait
-            step_time = -1e9;
-        }
-        if (got("\"Event\":\"Tuned\"")) {
-            check(got("\"Event\":\"Reset\""), "a new JSON message cancels a tune waiting for carrier");
+    case 10: { // a tune waiting for carrier answers polls; Reset stops it
+        static int sub;
+        int busy = 0;
+        for (const char *p = from_pic + mark; (p = strstr(p, "\"Event\":\"Busy\"")) != NULL; p++)
+            busy++;
+        if (sub == 0 && waited(2)) {
+            send("{\"Status\": true}\n");
+            sub = 1;
+        } else if (sub == 1 && got("\"SWR\":")) {
+            check(!got("\"Event\":\"Reset\"") && !got("\"Event\":\"Tuned\""),
+                  "status answered while a tune waits for carrier");
+            send("{\"Raw\": true}\n");
+            sub = 2;
+        } else if (sub == 2 && got("\"Fwd\":")) {
+            check(!got("\"Event\":\"Reset\"") && busy == 0, "detector readings answered while waiting");
+            send("{\"Bypass\": true}\n{\"Get\": 5}\n");
+            sub = 3;
+        } else if (sub == 3 && busy == 2) {
+            check(!got("\"Event\":\"Reset\"") && !got("\"Bypass\":true") && !got("\"05\":"),
+                  "other messages get Busy and the tune keeps waiting");
+            send("{\"Reset\": true}\n");
+            sub = 4;
+        } else if (sub == 4 && got("\"Event\":\"Tuned\"")) {
+            check(got("\"Event\":\"Reset\"") && relays_l() == 0 && relays_c() == 0,
+                  "Reset message cancels a tune waiting for carrier");
+            check(!got("\"Event\":\"Error\""), "no errors from messages during the tune");
+            sub = 0;
             next();
             send("{\"Dump\": \"all\"}\n");
-        } else if (secs() - fabs(step_time) > 10 && step_time > 0)
-            timeout(10, "cancelled tune");
+        } else
+            timeout(15, "messages during a waiting tune");
         break;
+    }
 
     case 11:
         if (waited(1) && step_time > 0) {

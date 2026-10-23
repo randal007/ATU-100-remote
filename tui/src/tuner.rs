@@ -198,6 +198,7 @@ impl Tuner {
                 Kind::Bad
             }
             "Overload" | "Error" => Kind::Bad,
+            "Busy" => Kind::Warn,
             _ => Kind::Info,
         };
         let text = match event {
@@ -207,6 +208,7 @@ impl Tuner {
             "Startup" => "Tuner started".to_string(),
             "Restart" => "Tuner restarted by its watchdog".to_string(),
             "Reset" => "Relays reset".to_string(),
+            "Busy" => "Busy tuning: command not done".to_string(),
             other => other.to_string(),
         };
         self.log(text, kind);

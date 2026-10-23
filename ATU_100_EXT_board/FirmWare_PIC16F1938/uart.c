@@ -102,15 +102,6 @@ bool uart_rx_message(void) {
     return rx_messages != 0;
 }
 
-// Is c waiting in the receive buffer?
-bool uart_rx_has(char c) {
-    uint8_t i;
-    for (i = rx_out; i != rx_in; i = (i + 1) & (RX_LEN - 1))
-        if (rx_buf[i] == c)
-            return true;
-    return false;
-}
-
 char uart_getc(void) {
     char c;
     if (rx_in == rx_out)

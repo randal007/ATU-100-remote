@@ -29,6 +29,7 @@ pub struct App {
 struct Outbox {
     queue: VecDeque<String>,
     sent_at: Option<Instant>,
+    recent: VecDeque<(Instant, String)>, // sent in the last second
 }
 
 /// What a newer command replaces: {"Set": 55, ...} by cell, others by name.
@@ -52,22 +53,61 @@ impl Outbox {
         self.sent_at = None;
     }
 
+    /// A status line the tuner sent before it read our commands would undo
+    /// their on-screen change, so a second quick click would start from the
+    /// old state. Apply the queued and just-sent commands again on top.
+    fn reapply(&mut self, t: &mut Tuner) {
+        self.recent.retain(|(at, _)| at.elapsed() < Duration::from_secs(1));
+        for msg in self.recent.iter().map(|(_, m)| m).chain(self.queue.iter()) {
+            let Ok(serde_json::Value::Object(cmd)) = serde_json::from_str(msg) else { continue };
+            let int = |name: &str| cmd.get(name).and_then(|v| v.as_u64());
+            if let Some(b) = cmd.get("Auto").and_then(|v| v.as_bool()) {
+                t.auto = b;
+            }
+            if let Some(b) = cmd.get("Bypass").and_then(|v| v.as_bool()) {
+                t.bypass = b;
+            }
+            if let Some(n) = int("RelayI") {
+                t.ind_bits = n as u8 & 0x7f;
+            }
+            if let Some(n) = int("RelayC") {
+                t.cap_bits = n as u8 & 0x7f;
+                t.order_lc = n & 128 != 0;
+            }
+            if let (Some(cell), Some(value)) = (int("Set"), int("Value")) {
+                if cell < 256 {
+                    t.eeprom[cell as usize] = Some(value as u8);
+                }
+            }
+        }
+    }
+
+    /// The tuner refused something: let its status stand
+    fn refused(&mut self) {
+        self.recent.clear();
+    }
+
     fn idle(&self) -> bool {
         self.queue.is_empty() && self.sent_at.is_none()
     }
 
     /// Send the next command once the last was answered, or after a second.
-    /// While tuning only Reset goes, to stop it.
+    /// While tuning only Reset (to stop it), Status and Raw go: the tuner
+    /// answers those while it waits for carrier.
     fn pump(&mut self, link: &mut Link, tuning: bool) {
         if self.sent_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
             return;
         }
         self.sent_at = None;
-        let next_ok = self.queue.front().is_some_and(|m| !tuning || m.contains("Reset"));
+        let next_ok = self
+            .queue
+            .front()
+            .is_some_and(|m| !tuning || ["Reset", "Status", "Raw"].iter().any(|k| m.contains(k)));
         if next_ok {
             let msg = self.queue.pop_front().unwrap();
             link.send(&msg);
             self.sent_at = Some(Instant::now());
+            self.recent.push_back((Instant::now(), msg));
         }
     }
 }
@@ -100,7 +140,7 @@ fn main() {
     let mut app = App { port, link_error: None, detector: false, started: Instant::now() };
     let mut t = Tuner::new();
     t.log("Connected, asking for the status and settings", Kind::Info);
-    let mut out = Outbox { queue: VecDeque::new(), sent_at: None };
+    let mut out = Outbox { queue: VecDeque::new(), sent_at: None, recent: VecDeque::new() };
     out.push(r#"{"Status": true}"#.into());
     out.push(r#"{"Dump": "EEPROM"}"#.into());
 
@@ -124,6 +164,10 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
             match msg {
                 Incoming::Line(line) => {
                     t.line(&line);
+                    if line.contains(r#""Event":"Error""#) || line.contains(r#""Event":"Busy""#) {
+                        out.refused();
+                    }
+                    out.reapply(t);
                     out.answered();
                 }
                 Incoming::Closed(why) => {
@@ -137,12 +181,12 @@ fn run(terminal: &mut ratatui::DefaultTerminal, link: &mut Link, out: &mut Outbo
             t.sample();
         }
         // The tuner sends a status whenever something changes; ask now and
-        // then so a silent link shows up, but not while it is busy
-        if last_poll.elapsed() >= Duration::from_secs(5) && !t.tuning && t.dumped && out.idle() {
+        // then so a silent link shows up (it answers while tuning, too)
+        if last_poll.elapsed() >= Duration::from_secs(5) && t.dumped && out.idle() {
             last_poll = Instant::now();
             out.push(r#"{"Status": true}"#.into());
         }
-        if app.detector && last_raw.elapsed() >= Duration::from_secs(1) && !t.tuning && t.dumped && out.idle() {
+        if app.detector && last_raw.elapsed() >= Duration::from_secs(1) && t.dumped && out.idle() {
             last_raw = Instant::now();
             out.push(r#"{"Raw": true}"#.into());
         }

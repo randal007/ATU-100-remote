@@ -9,7 +9,7 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 - Firmware on branch `display-buttons-uart` (the fork's default branch):
   display + buttons + serial, bug fixes, log grid tuning search,
   Power/Antenna/Efficiency, `{"Raw":true}`, live settings, `HighSWR` event.
-  14900 of 16384 words, 661 bytes RAM.
+  15057 of 16384 words, 662 bytes RAM.
 - 2026-10-23 serial robustness: 128 byte receive buffer; the measuring
   loop breaks off when a message starts (counting `{`, not `}`: a command
   is acted on before its `}` is read); damaged messages are dropped (a `{`
@@ -17,10 +17,18 @@ all three buttons and a serial link to the Mega and/or an ESP32.
   the mouse wheel in atutop overflowed the old 64 byte buffer and a
   garbled message left the parser out of step (endless `Error` events,
   Auto stuck). The 7-message burst test now lands all 7 with no errors.
+- 2026-10-23 later: a tune waiting for carrier no longer gives up on any
+  message. `serial_during_tune()` (main.c, called from get_swr's wait loop
+  in main.h) answers Status/Raw/`s`, stops on Reset/Tune/`r`/`t`, and
+  answers the rest with a new `Busy` event. Simulator step 10 checks it.
 - atutop (tui/, Rust + ratatui): btop-style terminal program; installed to
   ~/.local/bin/atutop. Commands go through an outbox: one at a time, each
-  after an answer (or 1 s), repeats of the same setting merged, only
-  Reset sent while tuning.
+  after an answer (or 1 s), repeats of the same setting merged; while
+  tuning only Reset, Status and Raw go. After each incoming line the
+  queued commands and those sent in the last second are applied again on
+  screen (`Outbox::reapply`), so quick clicks no longer toggle from a stale
+  state (8 quick steps down from 3.0 now end at 2.2). Error/Busy drop the
+  sent ones.
 - Python tools updated and fixed; `test/python_tools.sh` drives them.
 - README.md is the full manual.
 - Tested only in the PC simulator (`test/run.sh`, `test/python_tools.sh`).
@@ -28,22 +36,10 @@ all three buttons and a serial link to the Mega and/or an ESP32.
 
 ### Open, next session
 
-1. **atutop: quick clicks.** A status line the tuner sent just before a
-   click overwrites the click's optimistic value on screen, so a second
-   quick click toggles from the wrong state (8 wheel steps down from 3.0
-   ended at 2.5, not 2.2). Fix: after each incoming line, re-apply the
-   commands still queued and those sent in the last second (parse the
-   message: Auto, Bypass, RelayI, RelayC, Set cell/value).
-2. **Firmware: polls cancel tunes.** While a tune waits for enough power
-   (gaps in SSB speech), any incoming `{` cancels it (get_swr in main.h,
-   `uart_rx_has('{')`). atutop's 5 s status poll would do that. Plan: a
-   `serial_during_tune()` in main.c called from that loop: answer Status
-   and Raw, stop on Reset or Tune, answer anything else with a new `Busy`
-   event. Add a simulator check that polls during a waiting tune.
-3. Then: back up the tuner's EEPROM, flash with the PICkit 3 (MPLAB IPE
-   6.20 or older), check display/buttons/serial, compare the two tuning
-   searches on the real antennas (cell 0x36).
-4. ESP32 bridge firmware, once the parts arrive (below).
+1. Back up the tuner's EEPROM, flash with the PICkit 3 (MPLAB IPE 6.20 or
+   older), check display/buttons/serial, compare the two tuning searches
+   on the real antennas (cell 0x36).
+2. ESP32 bridge firmware, once the parts arrive (below).
 
 ### Trying atutop without the tuner
 
