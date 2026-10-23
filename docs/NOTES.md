@@ -71,8 +71,33 @@ all three buttons and a serial link to the Mega and/or an ESP32.
    scale 0-40 W or 0-100 W to match, an over-power alarm above the limit,
    and changing the setting made deliberate: a prompt asking how the
    detector is wound, warning that the 1 W winding limits power to 40 W
-   (the detector overloads). Check the facts against the manual and
-   correct him where they differ.
+   (the detector overloads).
+   **Research done (N7DDC EXT manual, docs/, "Change of default
+   settings" + specs):**
+   - The winding is the tandem match (SWR bridge) transformer's turns
+     ratio, **cell 31** (`e_c_K_Mult`, BCD), default 10 = 1:10 = measures
+     up to about **150 W**. 1:5 = up to about **40 W**, "works better with
+     a minimum power of 1-5 W". 1:32 + cell 30 (high power) = 1500 W.
+     Rule: the detector voltage at the PIC must stay under 4.096 V at full
+     power; measurable power goes with the ratio squared (150 x (5/10)^2
+     = 37.5 W).
+   - Minimum tune power is a separate cell, **05** (default 05 = 5 W). The
+     firmware does not link them: going to 1 W means rewinding to 1:5 AND
+     setting cell 31 = 05 AND cell 05 = 01.
+   - Board rating: "maximum working throughput 100 W" (relays and parts),
+     "maximum measured 150 W" with the stock 1:10. So with 1:10 the
+     over-power warning is at 100 W (board), not 150 (detector).
+   - The firmware already sends an `Overload` event when the ADC reaches
+     its top (raw > 1000): that is the detector limit, ~150 W at 1:10,
+     ~37 W at 1:5. An over-power warning at the board/winding limit is new.
+   **Plan:** atutop power scale fixed by cell 31 (1:5 -> 0-40 W, 1:10 ->
+   0-100 W with the 100-150 W band red); over-power alarm in the firmware
+   (like HighSWR, new event `HighPower`, limit derived from cell 31 or a
+   new cell) so the Mega/ESP32 see it too; atutop "detector winding"
+   setting behind a confirm dialog that sets cells 31 and 05 together
+   (1:10 = 5 W min, 100 W max; 1:5 = 1 W min, 40 W max) and warns that
+   the setting must match the actual winding or every power and SWR
+   reading is wrong.
 5. LC/CL explained to him (2026-10-23): one relay puts the capacitors at
    the radio end (CL) or the antenna end (LC); C goes on the high
    impedance side; every tune picks it; saved in cell FD. Band memories
