@@ -1,3 +1,4 @@
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))] // the browser has no connect screen
 //! The connect screen: serial ports by what is plugged in, ESP32 bridges
 //! found on the network, the ports used before, and an address to type.
 

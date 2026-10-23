@@ -93,120 +93,140 @@ fn ws_url() -> String {
     format!("ws://{host}:{port}/")
 }
 
-/// A real text box over the settings field being typed in
+/// Real text boxes over the settings fields, one per field, while the
+/// settings box is open: a phone opens its keyboard only for a tap on a real
+/// text box, so the tap must land on one. What is typed goes to the field.
 struct Overlay {
-    input: HtmlInputElement,
-    field: Option<Field>,
+    boxes: Vec<(Field, HtmlInputElement)>,
+    focused: Option<Field>, // the field atutop had selected last frame
 }
+
+const FIELDS: [Field; 5] = [Field::Network, Field::Password, Field::Ip, Field::Gateway, Field::Mask];
 
 impl Overlay {
     fn new(core: Rc<RefCell<Core>>) -> Rc<RefCell<Overlay>> {
         let document = web_sys::window().unwrap().document().unwrap();
-        let input: HtmlInputElement = document.create_element("input").unwrap().dyn_into().unwrap();
-        input.set_attribute("id", "atu_field").unwrap();
-        input.set_attribute("autocomplete", "off").unwrap();
-        input.set_attribute("autocapitalize", "off").unwrap();
-        input.set_attribute("spellcheck", "false").unwrap();
-        document.body().unwrap().append_child(&input).unwrap();
-        let overlay = Rc::new(RefCell::new(Overlay { input: input.clone(), field: None }));
-
-        // What is typed goes to the field
-        let c = core.clone();
-        let oninput = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
-            let Some(input) = e.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) else { return };
-            c.borrow_mut().set_field_text(&input.value());
-        });
-        input.add_event_listener_with_callback("input", oninput.as_ref().unchecked_ref()).unwrap();
-        oninput.forget();
-
-        // Enter connects, Tab moves on, Escape closes, as in the terminal
-        let c = core.clone();
-        let onkey = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-            let key = match e.key().as_str() {
-                "Enter" => Some(Key::Enter),
-                "Escape" => Some(Key::Esc),
-                "Tab" if e.shift_key() => Some(Key::BackTab),
-                "Tab" => Some(Key::Tab),
-                _ => None,
-            };
-            if let Some(k) = key {
-                e.prevent_default();
-                c.borrow_mut().key(k);
+        let mut boxes = vec![];
+        for field in FIELDS {
+            let input: HtmlInputElement = document.create_element("input").unwrap().dyn_into().unwrap();
+            input.set_class_name("atu_field");
+            for (k, v) in [("autocomplete", "off"), ("autocapitalize", "off"), ("autocorrect", "off"), ("spellcheck", "false")] {
+                input.set_attribute(k, v).unwrap();
             }
-            e.stop_propagation();
-        });
-        input.add_event_listener_with_callback("keydown", onkey.as_ref().unchecked_ref()).unwrap();
-        onkey.forget();
+            let numeric = matches!(field, Field::Ip | Field::Gateway | Field::Mask);
+            input.set_attribute("inputmode", if numeric { "decimal" } else { "text" }).unwrap();
+            document.body().unwrap().append_child(&input).unwrap();
 
-        // A tap's mousedown puts the focus on the screen grid after our
-        // handler has run; the click that follows puts it back on the box
-        // (and, being the tap itself, brings up a phone's keyboard)
-        let field = input.clone();
-        let onclick = Closure::<dyn FnMut()>::new(move || {
-            if field.style().get_property_value("display").unwrap_or_default() == "block" {
-                let _ = field.focus();
-            }
-        });
-        document.add_event_listener_with_callback("click", onclick.as_ref().unchecked_ref()).unwrap();
-        onclick.forget();
-        overlay
-    }
+            // A tap or click on the box: atutop's selected field follows.
+            // (When atutop itself moved the focus, it is busy and knows.)
+            let c = core.clone();
+            let onfocus = Closure::<dyn FnMut()>::new(move || {
+                if let Ok(mut c) = c.try_borrow_mut() {
+                    c.act(Action::Focus(field));
+                }
+            });
+            input.add_event_listener_with_callback("focus", onfocus.as_ref().unchecked_ref()).unwrap();
+            onfocus.forget();
 
-    /// Put the box over the focused field, or hide it. `focus`: from a tap,
-    /// where focusing brings up a phone's keyboard
-    fn update(&mut self, core: &Core, focus: bool) {
-        let style = self.input.style();
-        let target = core.app.settings.as_ref().filter(|_| core.may_set_wifi()).and_then(|s| {
-            let rect = core.hits.areas.iter().find(|(_, a)| *a == Action::Focus(s.field)).map(|(r, _)| *r)?;
-            Some((s, rect))
-        });
-        let Some((s, rect)) = target else {
-            if self.field.is_some() {
-                let _ = style.set_property("display", "none");
-                let _ = self.input.blur();
-                self.field = None;
-                // keys back to the screen
-                if let Some(grid) = web_sys::window().unwrap().document().unwrap().get_element_by_id("grid") {
-                    if let Ok(g) = grid.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = g.focus();
+            // What is typed goes to the field
+            let c = core.clone();
+            let oninput = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+                let Some(input) = e.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) else { return };
+                if let Ok(mut c) = c.try_borrow_mut() {
+                    c.act(Action::Focus(field));
+                    c.set_field_text(&input.value());
+                }
+            });
+            input.add_event_listener_with_callback("input", oninput.as_ref().unchecked_ref()).unwrap();
+            oninput.forget();
+
+            // Enter connects, Tab moves on, Escape closes, as in the terminal
+            let c = core.clone();
+            let onkey = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                let key = match e.key().as_str() {
+                    "Enter" => Some(Key::Enter),
+                    "Escape" => Some(Key::Esc),
+                    "Tab" if e.shift_key() => Some(Key::BackTab),
+                    "Tab" => Some(Key::Tab),
+                    _ => None,
+                };
+                if let Some(k) = key {
+                    e.prevent_default();
+                    if let Ok(mut c) = c.try_borrow_mut() {
+                        c.key(k);
                     }
                 }
-            }
-            return;
-        };
+                e.stop_propagation();
+            });
+            input.add_event_listener_with_callback("keydown", onkey.as_ref().unchecked_ref()).unwrap();
+            onkey.forget();
+            boxes.push((field, input));
+        }
+        Rc::new(RefCell::new(Overlay { boxes, focused: None }))
+    }
+
+    /// Each frame: boxes over the fields on screen, the rest hidden; their
+    /// text from atutop unless being typed in
+    fn update(&mut self, core: &Core) {
         let document = web_sys::window().unwrap().document().unwrap();
-        // Screen cells are spans in one <pre> per row: measure the field's
-        // first cell and its last
+        let active = document.active_element();
+        let settings = core.app.settings.as_ref().filter(|_| core.may_set_wifi());
+        // Screen cells are spans in one <pre> per row
         let cell = |x: u16, y: u16| -> Option<web_sys::DomRect> {
             let grid = document.get_element_by_id("grid")?;
             let row = grid.children().item(y as u32)?;
             Some(row.children().item(x as u32)?.get_bounding_client_rect())
         };
-        let (Some(a), Some(b)) = (cell(rect.x, rect.y), cell(rect.x + rect.width - 1, rect.y)) else { return };
-        let _ = style.set_property("display", "block");
-        let _ = style.set_property("left", &format!("{}px", a.left()));
-        let _ = style.set_property("top", &format!("{}px", a.top()));
-        let _ = style.set_property("width", &format!("{}px", b.right() - a.left()));
-        let _ = style.set_property("height", &format!("{}px", a.height()));
-        let password = s.field == Field::Password && !s.show_pass;
-        let _ = self.input.set_attribute("type", if password { "password" } else { "text" });
-        let numeric = matches!(s.field, Field::Ip | Field::Gateway | Field::Mask);
-        let _ = self.input.set_attribute("inputmode", if numeric { "decimal" } else { "text" });
-        let text = match s.field {
-            Field::Network => &s.ssid,
-            Field::Password => &s.pass,
-            Field::Ip => &s.ip,
-            Field::Gateway => &s.gateway,
-            Field::Mask => &s.mask,
-        };
-        // a new field, or a change from elsewhere (a network picked from the list)
-        if self.field != Some(s.field) || self.input.value() != *text {
-            self.input.set_value(text);
+        let mut any_focused = false;
+        for (field, input) in &self.boxes {
+            let style = input.style();
+            let place = settings.and_then(|s| {
+                let rect = core.hits.areas.iter().find(|(_, a)| *a == Action::Focus(*field)).map(|(r, _)| *r)?;
+                let (a, b) = (cell(rect.x, rect.y)?, cell(rect.x + rect.width - 1, rect.y)?);
+                Some((s, a, b))
+            });
+            let Some((s, a, b)) = place else {
+                if style.get_property_value("display").unwrap_or_default() != "none" {
+                    let _ = style.set_property("display", "none");
+                    let _ = input.blur();
+                    input.set_value(""); // no password left behind in the page
+                }
+                continue;
+            };
+            let _ = style.set_property("display", "block");
+            let _ = style.set_property("left", &format!("{}px", a.left()));
+            let _ = style.set_property("top", &format!("{}px", a.top()));
+            let _ = style.set_property("width", &format!("{}px", b.right() - a.left()));
+            let _ = style.set_property("height", &format!("{}px", a.height()));
+            let password = *field == Field::Password && !s.show_pass;
+            let kind = if password { "password" } else { "text" };
+            if input.type_() != kind {
+                input.set_type(kind);
+            }
+            let text = match field {
+                Field::Network => &s.ssid,
+                Field::Password => &s.pass,
+                Field::Ip => &s.ip,
+                Field::Gateway => &s.gateway,
+                Field::Mask => &s.mask,
+            };
+            let is_active = active.as_ref().is_some_and(|e| e == input.unchecked_ref::<web_sys::Element>());
+            any_focused |= is_active;
+            // atutop's text unless the box is being typed in; and the box
+            // follows when atutop moves to another field (Tab, a network
+            // picked from the list) while some box has the keyboard
+            if !is_active && input.value() != *text {
+                input.set_value(text);
+            }
+            if s.field == *field && self.focused != Some(*field) && self.focused.is_some() {
+                input.set_value(text);
+                let _ = input.focus();
+            }
         }
-        if focus || self.field != Some(s.field) {
-            let _ = self.input.focus();
+        self.focused = settings.filter(|_| any_focused || self.focused.is_some()).map(|s| s.field);
+        if settings.is_none() {
+            self.focused = None;
         }
-        self.field = Some(s.field);
     }
 }
 
@@ -306,8 +326,7 @@ pub fn main() {
             let mut c = core.borrow_mut();
             let fx = c.mouse(Mouse::Click(x, y));
             effect(fx, &mut c);
-            // a tap on a field: the text box now, while the tap counts
-            overlay.borrow_mut().update(&c, true);
+            overlay.borrow_mut().update(&c);
         });
         document.add_event_listener_with_callback("mousedown", onmouse.as_ref().unchecked_ref()).unwrap();
         onmouse.forget();
@@ -356,6 +375,6 @@ pub fn main() {
         }
         c.tick(&mut |m| l.send(m));
         c.draw(f);
-        overlay.borrow_mut().update(&c, false);
+        overlay.borrow_mut().update(&c);
     });
 }

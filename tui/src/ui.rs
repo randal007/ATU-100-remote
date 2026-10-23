@@ -666,8 +666,10 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
     let h = body.height.min(want_h);
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
     f.render_widget(Clear, area);
-    let block = boxed("⁶", "settings", BOX_SETTINGS).title(corner("Esc to close".into(), BOX_SETTINGS));
+    let block = boxed("⁶", "settings", BOX_SETTINGS).title(corner("Esc to close ✕".into(), BOX_SETTINGS));
     let inner = block.inner(area);
+    // a tap on "Esc to close": no keyboard on a phone
+    hits.areas.push((Rect { x: area.x + area.width / 2, y: area.y, width: area.width - area.width / 2, height: 1 }, Action::CloseSettings));
     f.render_widget(block, area);
     let buf = f.buffer_mut();
     let bottom = inner.y + inner.height;
@@ -982,8 +984,9 @@ fn draw_winding(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits
     let h = body.height.min(if w < 70 { 27 } else { 19 });
     let area = Rect { x: body.x + (body.width - w) / 2, y: body.y + (body.height - h) / 2, width: w, height: h };
     f.render_widget(Clear, area);
-    let block = boxed("⁷", "detector winding", RED).title(corner("Esc to cancel".into(), RED));
+    let block = boxed("⁷", "detector winding", RED).title(corner("Esc to cancel ✕".into(), RED));
     let inner = block.inner(area);
+    hits.areas.push((Rect { x: area.x + area.width / 2, y: area.y, width: area.width - area.width / 2, height: 1 }, Action::WindingCancel));
     f.render_widget(block, area);
     let buf = f.buffer_mut();
     let bottom = inner.y + inner.height;
