@@ -5,11 +5,33 @@ amplifier run by an Arduino Mega; the goal is one firmware with the display,
 all three buttons and a serial link to the Mega and/or an ESP32.
 README.md is the full manual; this file is the working notes.
 
-## Where things stand (2026-10-23) — resume here
+## Where things stand (2026-10-24) — resume here
 
-Everything is on branch `display-buttons-uart` (the fork's default branch)
-of randal007/ATU-100-remote, pushed. **All of it is tested in the
-simulators only: nothing has been flashed or used on the air.**
+Two branches of randal007/ATU-100-remote, both tested in the simulators
+only (**nothing flashed or used on the air**):
+
+- `display-buttons-uart` (the fork's default, PR #1 into master): N7DDC's
+  search and the log grid search (cell 36 chooses), firmware 1.0.
+- `tune-research` (from it, his idea 2026-10-23: "one branch with the log
+  and N7DDC, one with N7DDC and the better one"; then "get rid of N7DDC
+  for this build too"): **the model search only**, firmware 1.1. Measure
+  7 settings, fit a parabola along the L-only and C-only lines, measure at
+  their bottoms, calculate the antenna and the exact match on both sides,
+  refine with a 3x3 bowl fit, 7x7 grid + bowl above SWR 1.3. As built,
+  10 W: 96% below SWR 1.5 in 1.5 s, against log grid 91% / 3.7 s and
+  N7DDC 52% / 1.4 s. Floats run on a byte-code calculator (`m_calc`) to
+  fit: 16325 of 16384 words, 919 bytes RAM, stack 15 of 16. Cell 36
+  unused; atutop and the Python tools lost the search switch. The whole
+  study, every method and the tables: research/tuning/README.md.
+  `research/tuning/firmware.py` is the firmware's search in Python (reads
+  the programs from main.h); `research/tuning/cycles/run.sh` times them
+  in gpsim (16F1788, same core).
+
+He chooses which branch goes forward after comparing; then the final
+ultra review.
+
+The rest of this section describes `display-buttons-uart`; on
+`tune-research` read "model search" for "log grid search".
 
 - **Tuner firmware** (PIC16F1938): display + 3 buttons + serial on RA6/RA7
   (pins 9/10), JSON protocol, log grid tuning search (cell 36), HighSWR
@@ -20,7 +42,7 @@ simulators only: nothing has been flashed or used on the air.**
   line. Revision `FW_REVISION` "1.0" in main.c, in the Startup `Build`
   field. 15535 of 16384 words (95%), 662 bytes RAM, call stack 14 of 16
   (build.sh checks it). Hex:
-  `ATU-100_display_uart_PIC16F1938_20261023.hex` (rebuild + copy with
+  `ATU-100_display_uart_PIC16F1938_20261024.hex` (rebuild + copy with
   every firmware change).
 - **Simulator**: `test/run.sh`, 40 checks per display type (37 LED) x 3
   baud offsets, +-2.5% for one display, + the search sweep (log grid 91% vs
@@ -43,21 +65,24 @@ simulators only: nothing has been flashed or used on the air.**
 
 ### Next
 
-1. **First flash** (he is getting ready to test): back up the tuner's
+1. **Which branch**: he compares `tune-research` (model search) with
+   `display-buttons-uart`; then the final ultra review of the chosen one.
+2. **First flash** (he is getting ready to test): back up the tuner's
    EEPROM and flash with the PICkit 3 (MPLAB IPE 6.20 or older, can be
    installed for him), check display/buttons/serial with atutop, then
-   compare the two tuning searches on the real antennas (cell 36).
-2. **ESP32 bridge on the board** when the parts arrive: `esp32/build.sh`,
+   tune on the real antennas (with display-buttons-uart, cell 36 switches
+   the search).
+3. **ESP32 bridge on the board** when the parts arrive: `esp32/build.sh`,
    upload; check opening the native USB port does not reset it (DTR/RTS),
    Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
    the Mega port.
-3. **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
+4. **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
    15 inline findings + 5 small, all real, all fixed except item 11
    (serial sampling point: kept, margin +3.5/-2.5% covers the PIC's 2%;
    explained to him). After the fixes: merge PR #1, make master the
    default branch again, delete display-buttons-uart (he agreed in
    principle; confirm).
-4. Ideas: a raw "any cell" hex editor in ATU-100 settings (offered, not
+5. Ideas: a raw "any cell" hex editor in ATU-100 settings (offered, not
    asked for); band memories on the Mega/ESP32 (restore L, C and the LC/CL
    side); a hint in atutop that LC means a load above 50 ohm; report the
    Ratzilla resize bug upstream; move off the Ratzilla git commit once a
@@ -182,6 +207,14 @@ hamradio.
   of matchable loads (worst on the upper bands) because its coarse L steps
   are ~600 nH and it adjusts L and C one at a time. The log grid search
   reaches about 91% (99% of loads starting below SWR 10), ~3 s vs ~1 s.
+- Tuning research (2026-10-23/24, research/tuning): the model search, 96%
+  in 1.5 s on a realistic tuner; an unconstrained model fit reaches 98%
+  but needs a minute of float maths on the PIC. Below ~2 W every search
+  suffers (the reflected diode's knee): advise tuning with 5-10 W.
+- The simulator's realistic tuner: `REAL=1` (host.c: parts off, strays,
+  coil loss, diodes 15% off N7DDC's table); `FWD_MV=636` for 5 W; the
+  sweep CSV has a `readings` column (get_pwr calls, each ~2 ms of float
+  maths on the PIC that the simulator does not time).
 - N7DDC's EXT manual (docs/): cell 31 tandem match ratio (1:10 to ~150 W,
   1:5 to ~40 W and better at 1-5 W, 1:32 + cell 30 to 1500 W; keep the
   PIC's inputs under 4.096 V); board rated 100 W; cell 05 minimum tune

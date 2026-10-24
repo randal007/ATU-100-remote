@@ -22,11 +22,12 @@ for err in 2.5 -2.5; do
     DISPLAY_TYPE=5 BAUD_ERR=$err ./host_test > "log_d5_e${err}.txt" || status=1
     grep -E "PASSED|FAILED" "log_d5_e${err}.txt" | sed "s/^ */display 5, baud $err%: /"
 done
-# Tuning searches over ~1000 loads on 160-10 m with 1% detector noise
-for mode in 0 1; do
-    [ $mode = 0 ] && name="N7DDC original" || name="log grid search"
+# The tuning search over ~1100 loads on 160-10 m with 1% detector noise,
+# on ideal relays and on a tuner as built (parts off, strays, coil loss)
+for real in 0 1; do
+    [ $real = 0 ] && name="ideal tuner" || name="tuner as built"
     echo "tuning sweep, $name:"
-    TUNE_MODE=$mode NOISE=1 SWEEP=1 DISPLAY_TYPE=0 ./host_test | grep -E "tuned below|left at"
-    cp sweep.csv "sweep_mode$mode.csv"
+    REAL=$real NOISE=1 SWEEP=1 DISPLAY_TYPE=0 ./host_test | grep -E "tuned below|left at"
+    cp sweep.csv "sweep_real$real.csv"
 done
 exit $status

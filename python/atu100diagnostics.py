@@ -692,16 +692,6 @@ class atu100diag(object):
         self.cwin.addstr(row, CONFIG_SECOND, f'{address:02x}:')
         self.cwin.addstr(row, CONFIG_SECONDD, valstr, curses.color_pair(C_GOOD_DATA))
 
-
-        address = cell.EEPROM_TUNE_MODE
-        value = self.atu.eeprom[address]
-        valstr = 'Original search ' if value == 0 else 'Log grid search '
-        if log:
-            logging.info(valstr)
-        row += 1
-        self.cwin.addstr(row, CONFIG_FIRST, f'{address:02x}:')
-        self.cwin.addstr(row, CONFIG_FIRSTD, valstr, curses.color_pair(C_GOOD_DATA))
-
         address = cell.EEPROM_SWR_ALARM
         value = self.atu.eeprom[address]
         attr = C_GOOD_DATA
@@ -716,8 +706,9 @@ class atu100diag(object):
             valstr = 'Invalid HighSWR '
         if log:
             logging.info(valstr)
-        self.cwin.addstr(row, CONFIG_SECOND, f'{address:02x}:')
-        self.cwin.addstr(row, CONFIG_SECONDD, valstr, curses.color_pair(attr))
+        row += 1
+        self.cwin.addstr(row, CONFIG_FIRST, f'{address:02x}:')
+        self.cwin.addstr(row, CONFIG_FIRSTD, valstr, curses.color_pair(attr))
 
         address = cell.EEPROM_LAST_SWR_L
         valuelow = self.atu.eeprom[address]

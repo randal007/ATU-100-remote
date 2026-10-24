@@ -111,20 +111,51 @@ static int relays_c(void)
            LATC_r.LATC5 << 4 | LATC_r.LATC1 << 5 | LATC_r.LATC4 << 6;
 }
 
-static double swr_for(int lbits, int cbits, int c_out)
+/* REAL=1: a tuner as built, not as drawn. The firmware does not know any
+   of this: each relay's part a few % off its marked value, stray
+   capacitance at both ports, wiring inductance, coil losses, and detector
+   diodes whose drop is 15% bigger than N7DDC's correction table assumes. */
+static int real(void)
+{
+    static int r = -1;
+    if (r < 0)
+        r = getenv("REAL") && atoi(getenv("REAL"));
+    return r;
+}
+static const double tol_l[7] = {+0.06, -0.04, +0.03, -0.07, +0.05, -0.02, +0.04};
+static const double tol_c[7] = {-0.05, +0.07, -0.03, +0.04, -0.06, +0.02, -0.04};
+#define C_STRAY_TX 15e-12
+#define C_STRAY_ANT 12e-12
+#define L_WIRING 40e-9
+#define COIL_Q 80.0
+
+static double complex gamma_for(int lbits, int cbits, int c_out)
 {
     double l = 0, c = 0, w = 2 * M_PI * freq;
+    int r = real();
     for (int i = 0; i < 7; i++) {
-        if (lbits >> i & 1) l += ind_nh[i] * 1e-9;
-        if (cbits >> i & 1) c += cap_pf[i] * 1e-12;
+        if (lbits >> i & 1) l += ind_nh[i] * 1e-9 * (r ? 1 + tol_l[i] : 1);
+        if (cbits >> i & 1) c += cap_pf[i] * 1e-12 * (r ? 1 + tol_c[i] : 1);
     }
-    double complex zl = I * w * l, zin;
+    double complex zload = z_load;
+    if (r) {
+        l += L_WIRING;
+        zload = 1 / (1 / zload + I * w * C_STRAY_ANT);
+    }
+    double complex zl = I * w * l + (r ? w * l / COIL_Q : 0), zin;
     double complex yc = I * w * c;
     if (c_out) // C on the antenna side
-        zin = zl + 1 / (1 / z_load + yc);
+        zin = zl + 1 / (1 / zload + yc);
     else
-        zin = 1 / (1 / (zl + z_load) + yc);
-    double g = cabs((zin - 50) / (zin + 50));
+        zin = 1 / (1 / (zl + zload) + yc);
+    if (r)
+        zin = 1 / (1 / zin + I * w * C_STRAY_TX);
+    return (zin - 50) / (zin + 50);
+}
+
+static double swr_for(int lbits, int cbits, int c_out)
+{
+    double g = cabs(gamma_for(lbits, cbits, c_out));
     return (1 + g) / (1 - g);
 }
 
@@ -133,7 +164,7 @@ static double swr_now(void)
     return swr_for(relays_l(), relays_c(), LATC_r.LATC0);
 }
 
-// Lowest SWR any relay combination reaches
+// Lowest SWR any relay combination reaches (with REAL=1, on the real tuner)
 static double swr_best(void)
 {
     double best = 1e9;
@@ -146,17 +177,56 @@ static double swr_best(void)
     return best;
 }
 
+/* REAL=1: the detector diodes. N7DDC's correction() adds the diode drop
+   back to a reading (the firmware's "x3" millivolts); here the real drop is
+   15% bigger than his table says. */
+static double diode_drop(double d) // the table's drop for a detected d
+{
+    static const int upto[] = {171, 328, 582, 820, 1100, 2181, 3322, 4623, 5862, 7146, 8502, 10500};
+    static const int add[] = {244, 254, 280, 297, 310, 430, 484, 530, 648, 743, 800, 840};
+    for (int i = 0; i < 12; i++)
+        if (d <= upto[i])
+            return add[i];
+    return 860;
+}
+
+static double diode(double v) // detected output for an RF voltage v
+{
+    if (v <= 80 + 1.15 * 244)
+        return 0; // below the diode's knee
+    double lo = 80, hi = v;
+    for (int k = 0; k < 40; k++) {
+        double d = (lo + hi) / 2;
+        if (d + 1.15 * diode_drop(d) > v)
+            hi = d;
+        else
+            lo = d;
+    }
+    return lo;
+}
+
 static long adc_reads;
+// get_pwr calls: forward readings on the first ADC range. On the PIC each
+// also takes 2 ms or so of float maths, which this simulator does not time
+static long readings;
 
 struct misc_bits *adc_hook(void)
 {
     static const double ref[4] = {1024, 1024, 2048, 4096};
     if (misc_r.ADGO) { // conversion started by the previous statement
         adc_reads++;
+        if (misc_r.CHS == 1 && (FVRCON & 3) == 1)
+            readings++;
         double mv = fwd_mv;
         if (misc_r.CHS == 0 && fwd_mv > 0) { // reverse detector
             double s = swr_now();
             mv = fwd_mv * (s - 1) / (s + 1);
+        }
+        if (real() && misc_r.CHS == 0 && fwd_mv > 0) {
+            // reflected RF = the forward RF (its reading with the real drop
+            // added back) times |gamma|, then through its own diode
+            double vf = 3 * fwd_mv + 1.15 * diode_drop(3 * fwd_mv);
+            mv = diode(vf * cabs(gamma_for(relays_l(), relays_c(), LATC_r.LATC0))) / 3;
         }
         if (getenv("TRACE_ADC") && misc_r.CHS == 0 && fwd_mv > 0)
             printf("    adc %.2f s L=%3d C=%3d sw=%d swr=%.2f\n", secs(), relays_l(), relays_c(), LATC_r.LATC0,
@@ -451,8 +521,8 @@ void tune(void);
 
 /*  SWEEP=1: tune about a thousand loads across HF and compare with the
     best match the relays can reach. One line per load in sweep.csv.
-    TUNE_MODE=0 selects N7DDC's original search, NOISE=n adds n% noise
-    to the detector readings. */
+    NOISE=n adds n% noise to the detector readings, FWD_MV=636 tunes with
+    5 W instead of 10. */
 static void sweep(void)
 {
     static const double mhz[] = {1.85, 3.6, 5.35, 7.1, 10.1, 14.2, 18.1, 21.2, 24.9, 28.5};
@@ -461,8 +531,8 @@ static void sweep(void)
     FILE *f = fopen("sweep.csv", "w");
     int n = 0, good = 0, near = 0, unmatched = 0;
     double worst_gap = 0;
-    fprintf(f, "MHz,R,X,start_swr,tuned_swr,best_swr,adc_reads,seconds\n");
-    fwd_mv = 900;
+    fprintf(f, "MHz,R,X,start_swr,tuned_swr,best_swr,adc_reads,readings,seconds\n");
+    fwd_mv = getenv("FWD_MV") ? atof(getenv("FWD_MV")) : 900; // 900: 10 W, 636: 5 W
     for (unsigned i = 0; i < sizeof mhz / sizeof *mhz; i++)
         for (unsigned j = 0; j < sizeof r / sizeof *r; j++)
             for (unsigned k = 0; k < sizeof x / sizeof *x; k++) {
@@ -478,13 +548,13 @@ static void sweep(void)
                 if (best > 1.5)
                     continue; // the relays cannot match it anyway
                 double start = swr_for(0, 0, 1);
-                long reads = adc_reads;
+                long reads = adc_reads, n_readings = readings;
                 double t = secs();
                 tune();
                 double tuned = swr_now();
                 if (tuned > 99) tuned = 99; // a real meter stops at 9.99
-                fprintf(f, "%.2f,%.0f,%.0f,%.2f,%.2f,%.2f,%ld,%.2f\n", mhz[i], r[j], x[k], start, tuned, best,
-                        adc_reads - reads, secs() - t);
+                fprintf(f, "%.2f,%.0f,%.0f,%.2f,%.2f,%.2f,%ld,%ld,%.2f\n", mhz[i], r[j], x[k], start, tuned, best,
+                        adc_reads - reads, readings - n_readings, secs() - t);
                 n++;
                 if (tuned < 1.5) good++;
                 if (tuned < best * 1.1 + 0.05) near++;
@@ -818,8 +888,6 @@ int main(void)
     if (getenv("DISPLAY_TYPE"))
         eeprom[1] = (unsigned char)atoi(getenv("DISPLAY_TYPE"));
     display_type = eeprom[1];
-    if (getenv("TUNE_MODE"))
-        eeprom[0x36] = (unsigned char)atoi(getenv("TUNE_MODE"));
     misc_r.nTO = 1;
     PORTB_r.v = 0x07; // buttons up
     printf("ATU-100 host test: display type %d, Arduino baud error %+.1f%%\n", display_type, err);

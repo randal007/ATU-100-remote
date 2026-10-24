@@ -11,7 +11,6 @@ pub const CELL_AUTO_SWR: usize = 0x04;
 pub const CELL_MIN_POWER: usize = 0x05;
 pub const CELL_HIGH_POWER: usize = 0x30;
 pub const CELL_WINDING: usize = 0x31; // tandem match turns ratio, BCD: 10 = 1:10
-pub const CELL_TUNE_MODE: usize = 0x36;
 pub const CELL_SWR_ALARM: usize = 0x37;
 const CELL_LAST_SW: usize = 0xfd;
 const CELL_LAST_IND: usize = 0xfe;
@@ -284,10 +283,6 @@ impl Tuner {
             Some(0) => None,
             Some(b) => Some(bcd(b) as f64 / 10.0),
         }
-    }
-
-    pub fn search_original(&self) -> Option<bool> {
-        self.eeprom[CELL_TUNE_MODE].map(|b| b == 0)
     }
 
     pub fn high_power(&self) -> bool {

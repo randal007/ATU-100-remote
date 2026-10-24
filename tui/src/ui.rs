@@ -38,7 +38,6 @@ pub enum Action {
     Reset,
     Status,
     Detector,
-    Search,
     AlarmUp,
     AlarmDown,
     Ind(u8),
@@ -480,12 +479,6 @@ fn draw_tuner(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) 
     let mut bypass = vec![label("Bypass", w)];
     bypass.extend(switch(t.bypass));
     lines.push((Line::from(bypass), Some(Action::Bypass)));
-    let search = match t.search_original() {
-        Some(true) => value("N7DDC original".into()),
-        Some(false) => value("log grid".into()),
-        None => dim("…"),
-    };
-    lines.push((Line::from(vec![label("Search", w), search, dim("  g")]), Some(Action::Search)));
     let alarm = match t.alarm() {
         Some(a) => value(format!("SWR {a:.1}")),
         None => value("off".into()),
@@ -594,7 +587,6 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         ("r", "reset", Action::Reset, false),
         ("s", "status", Action::Status, false),
         ("v", "detector", Action::Detector, app.detector),
-        ("g", "search", Action::Search, false),
         ("o", "network", Action::Settings, false),
         ("e", "atu-100", Action::AtuOpen, false),
         ("q", "quit", Action::Quit, false),
@@ -604,7 +596,7 @@ fn draw_keys(f: &mut Frame, area: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
     }
     // On a narrow terminal leave out the buttons least needed (their keys
     // still work) so settings and quit always show
-    for drop in [Action::Status, Action::Search, Action::Detector, Action::Reset] {
+    for drop in [Action::Status, Action::Detector, Action::Reset] {
         if !keys_fit(&keys, area) {
             keys.retain(|k| k.2 != drop);
         }

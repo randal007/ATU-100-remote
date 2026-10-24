@@ -10,15 +10,15 @@
 #include "oled_control.h"
 #include "uart.h"
 #include "json.h"
-#include "main.h"
 #include <string.h>
+#include "main.h"
 
 /*  a few constants */
 
 #define DEFAULT_INITIAL_OLD_VALUE  10000
 
 // Sent at start-up as "Build"; raise the revision with each release
-#define FW_REVISION "1.0"
+#define FW_REVISION "1.1" // 1.1: the model tuning search
 #define FW_BUILD    "VE7NHW display+serial " FW_REVISION ", " __DATE__
 
 // Variables
@@ -969,8 +969,6 @@ static void fmt_pwr(int power)
 
 void show_pwr(int parm_Power, int parm_SWR)
 {
-   int p_ant;
-   double a, b;
    //
    if (g_b_Test_mode == 0 & e_c_b_Loss_ind == 1 & parm_Power >= 10)
    {
@@ -1022,19 +1020,17 @@ void show_pwr(int parm_Power, int parm_SWR)
             g_i_swr_a = parm_SWR;
          if (g_i_swr_a < 100)
             g_i_swr_a = 100; // none saved yet: 0 would divide by zero
-         a = 1.0 / ((g_i_swr_a / 100.0 + 100.0 / g_i_swr_a) * e_c_tenths_Fid_loss / 10.0 * 0.115 + 1.0); // Fider loss
-         b = 4.0 / (2.0 + parm_SWR / 100.0 + 100.0 / parm_SWR);                         // parm_SWR loss
-         if (a >= 1.0)
-            a = 1.0;
-         if (b >= 1.0)
-            b = 1.0;
-         p_ant = (int)(parm_Power * a * b);
-         g_i_Efficency = (int)(a * b * 100);
+         m_in(0, g_i_swr_a); // feeder loss and SWR loss
+         m_in(1, e_c_tenths_Fid_loss);
+         m_in(2, parm_SWR);
+         m_in(3, parm_Power);
+         m_calc(p_loss);
+         g_i_Efficency = t_out[1];
          if (g_i_Efficency >= 100)
             g_i_Efficency = 99;
-         g_i_Power_report = p_ant;
+         g_i_Power_report = t_out[0];
          //
-         fmt_pwr(p_ant);
+         fmt_pwr(t_out[0]);
          if (big_oled())
             led_wr_str(4, 16 + 4 * 12, g_work_str_2, 4); // 128*64 OLED
          else if (e_c_ledtype == 2 | e_c_ledtype == 3)
@@ -1336,7 +1332,6 @@ void cells_init(void)
    e_c_b_Loss_ind = eeprom_read(EEPROM_ADDITIONAL_INDICATION);
    e_c_tenths_Fid_loss = Bcd2Dec(eeprom_read(EEPROM_FEEDER_LOSS));
    e_c_b_Relay_off = Bcd2Dec(eeprom_read(EEPROM_DISABLE_RELAYS));
-   e_c_tune_mode = eeprom_read(EEPROM_TUNE_MODE);
    i = eeprom_read(EEPROM_SWR_ALARM);
    e_i_swr_alarm = (i == 0xff) ? 300 : Bcd2Dec(i) * 10; // unset: 3.0
    // HighPower: the board's 100 W, or less for a smaller winding (power

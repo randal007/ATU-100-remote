@@ -48,7 +48,6 @@ const DISPLAYS: &[(u8, &str)] = &[
 ];
 const ADDRESSES: &[(u8, &str)] = &[(0x4E, "4E (1602 LCD)"), (0x7E, "7E (1602 LCD)"), (0x78, "78 (OLED)"), (0x7A, "7A (OLED)")];
 const COUNTS: &[(u8, &str)] = &[(5, "5"), (6, "6"), (7, "7")];
-const SEARCHES: &[(u8, &str)] = &[(0, "N7DDC original"), (1, "log grid")];
 
 const fn bcd(tenths: bool, unit: &'static str) -> Kind {
     Kind::Bcd { tenths, unit, zero: None, ff: None }
@@ -61,7 +60,6 @@ pub const CELLS: &[Def] = &[
     Def { cell: 0x05, name: "Tunes from", kind: bcd(false, "W"), default: 0x05, keep: false, note: "minimum power to tune; tens of W in high power mode" },
     Def { cell: 0x06, name: "Tunes up to", kind: Kind::Bcd { tenths: false, unit: "W", zero: Some("no limit"), ff: None }, default: 0x00, keep: false, note: "maximum power to tune; tens of W in high power mode" },
     Def { cell: 0x09, name: "Tunes only below SWR", kind: Kind::Bcd { tenths: true, unit: "", zero: Some("always tunes"), ff: None }, default: 0x00, keep: false, note: "no tune if the SWR starts above this" },
-    Def { cell: 0x36, name: "Tuning search", kind: Kind::Choice(SEARCHES), default: 0xFF, keep: false, note: "FF (unset) = log grid" },
     // Power and detector
     Def { cell: 0x31, name: "Detector winding", kind: Kind::Winding, default: 0x10, keep: false, note: "tandem match turns ratio 1:N; must match the transformer" },
     Def { cell: 0x30, name: "High power mode", kind: Kind::Toggle { off: "off (to 150 W)", on: "on (to 9999 W)" }, default: 0x00, keep: false, note: "needs a matching tandem match winding" },
