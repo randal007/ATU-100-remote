@@ -21,7 +21,8 @@ only: nothing has been flashed or used on the air.**
 
 This file is on both branches; this copy is on `display-buttons-uart`; the work goes on in `tune-research` (`git checkout tune-research`).
 
-His decisions (2026-10-24): **`tune-research` goes forward**; **keep
+His decisions (2026-10-24): **`tune-research` goes forward** (GitHub's
+default branch since then); **keep
 both branches** (he flashes each to compare the searches on the real
 tuner; never delete `display-buttons-uart`); what ends up in master is
 open. Shared fixes go on `display-buttons-uart` first, then
