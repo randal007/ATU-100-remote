@@ -29,9 +29,12 @@ tuner.
 > on real hardware or been used on the air yet. Keep the backup described
 > under [Installing](#installing) so you can go back to your old firmware.
 
-This is the `display-buttons-uart` branch of
-[randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote).
-See [History](#history) for the line of projects it comes from.
+This is the `tune-research` branch of
+[randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote), with
+the [model tuning search](#tuning-search); it is the one going forward. The
+`display-buttons-uart` branch is the same firmware with N7DDC's search and
+the log grid search instead, kept for comparing them on the air. See
+[History](#history) for the line of projects it comes from.
 
 ## Contents
 
@@ -804,9 +807,9 @@ Each project started from the one before it:
 5. **[ukoda/ATU-100-remote](https://github.com/ukoda/ATU-100-remote)**:
    David Annett. JSON messages, EEPROM access, relay control, the Python tools.
 6. **[randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote)**,
-   branch `display-buttons-uart` (this): Randal Warren, VE7NHW. Display and
-   buttons back (WA1RCT's XC8 display code), serial on the Tx_req pins,
-   the log grid and model tuning searches, HighSWR and HighPower alarms, detector
-   readings, live settings, bug fixes, atutop (terminal and browser), the
-   ESP32 bridge, the updated Python tools, the Arduino sketch and the
-   simulators.
+   branches `tune-research` (this) and `display-buttons-uart`: Randal
+   Warren, VE7NHW. Display and buttons back (WA1RCT's XC8 display code),
+   serial on the Tx_req pins, the log grid and model tuning searches,
+   HighSWR and HighPower alarms, detector readings, live settings, bug
+   fixes, atutop (terminal and browser), the ESP32 bridge, the updated
+   Python tools, the Arduino sketch and the simulators.
