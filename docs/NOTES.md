@@ -65,8 +65,10 @@ The rest of this section describes `display-buttons-uart`; on
 
 ### Next
 
-1. **Which branch**: he compares `tune-research` (model search) with
-   `display-buttons-uart`; then the final ultra review of the chosen one.
+1. **His choice (2026-10-24): `tune-research` goes forward**, and both
+   branches stay: he flashes each on the real tuner to compare the
+   searches. He runs `/code-review ultra` on both (on tune-research, then
+   `/code-review ultra 1` for PR #1).
 2. **First flash** (he is getting ready to test): back up the tuner's
    EEPROM and flash with the PICkit 3 (MPLAB IPE 6.20 or older, can be
    installed for him), check display/buttons/serial with atutop, then
@@ -79,9 +81,8 @@ The rest of this section describes `display-buttons-uart`; on
 4. **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
    15 inline findings + 5 small, all real, all fixed except item 11
    (serial sampling point: kept, margin +3.5/-2.5% covers the PIC's 2%;
-   explained to him). After the fixes: merge PR #1, make master the
-   default branch again, delete display-buttons-uart (he agreed in
-   principle; confirm).
+   explained to him). **Keep display-buttons-uart** (he wants both
+   branches for testing on hardware); what ends up in master is open.
 5. Ideas: a raw "any cell" hex editor in ATU-100 settings (offered, not
    asked for); band memories on the Mega/ESP32 (restore L, C and the LC/CL
    side); a hint in atutop that LC means a load above 50 ohm; report the
