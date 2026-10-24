@@ -30,10 +30,9 @@ expect "detector voltages" "$(atu -c v)" "Forward: +[0-9]+ mV"
 atu --swr-alarm 2.5 > /dev/null
 expect "HighSWR limit" "$(atu -c g -a 37)" "37 = 25"
 expect "HighSWR limit out of range refused" "$(atu --swr-alarm 10 2>&1)" "1\.1 to 9\.9, or 0 for off"
-atu --search original > /dev/null
-expect "tuning search" "$(atu -c g -a 36)" "36 = 00"
+atu -c r > /dev/null # from no relays, whatever the tune left
 atu -c C -r 0 > /dev/null
-expect "capacitor relay on" "$(atu)" "Capacitance: +330 pF"
+expect "capacitor relay on" "$(atu)" "Capacitance: +10 pF"
 atu -c d -e "$TMP/dump.json" > /dev/null
 expect "EEPROM dump" "$(python3 -c "import json; print(len(json.load(open('$TMP/dump.json'))))")" "^256$"
 python3 $PY/atu100hextojson.py ../../../ATU-100_display_uart_PIC16F1938_*.hex "$TMP/hex.json" > /dev/null

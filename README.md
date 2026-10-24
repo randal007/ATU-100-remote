@@ -9,8 +9,9 @@ tuner.
 - The display and buttons work exactly as in N7DDC's firmware.
 - 4800 baud serial on PIC pins 9 and 10, with JSON messages: status, SWR,
   transmitter and antenna power, relays, events, settings.
-- A tuning search that finds a match far more often than the original
-  (the original is still there, one setting away).
+- A tuning search that measures, calculates where the match is, and
+  checks: it finds a match far more often than the original, in about the
+  same time.
 - High SWR and high power alarms, detector readings, settings that apply
   without a restart.
 - **atutop**, a btop-style program with gauges, graphs and mouse control,
@@ -40,7 +41,7 @@ See [History](#history) for the line of projects it comes from.
 - [Front panel](#front-panel)
 - [Serial protocol](#serial-protocol)
 - [Settings (EEPROM cells)](#settings-eeprom-cells)
-- [Tuning searches](#tuning-searches)
+- [Tuning search](#tuning-search)
 - [atutop](#atutop)
 - [Python tools](#python-tools)
 - [Arduino Mega sketch](#arduino-mega-sketch)
@@ -59,7 +60,7 @@ See [History](#history) for the line of projects it comes from.
 | Buttons | 3 | none | 3 |
 | Serial port | none | pins 22/23 (the Auto and Bypass buttons) | pins 9/10 (the Tx_req pins) |
 | Tx_req output to the radio | yes | no | no: `Tune`/`Tuned` messages instead |
-| Tuning | N7DDC search | N7DDC search | log grid search, or N7DDC's |
+| Tuning | N7DDC search | N7DDC search | model search: measure, calculate, verify |
 | Antenna power and efficiency over serial | — | reported as "Power" | separate fields |
 | High SWR and high power alarms, detector readings, live settings | — | — | yes |
 | Every setting changed without a programmer | — | over serial, as raw bytes | over serial; atutop shows them in plain units |
@@ -211,7 +212,7 @@ the display-off timer (cell 32).
 
 | Event | When |
 |---|---|
-| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.0.1, Oct 24 2026"}`: the firmware's revision and build date, shown at the top of atutop |
+| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.1.1, Oct 24 2026"}`: the firmware's revision and build date, shown at the top of atutop |
 | `Restart` | the watchdog restarted the tuner |
 | `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal. Any waiting status goes out first, so after an auto tune starts the high SWR that started it has already been reported |
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
@@ -284,42 +285,68 @@ provides it, with `{"Set": ...}`, with `atu100.py -c s`, or in
 | 33 | Show antenna power and efficiency, 01 = on | 01 |
 | 34 | Feeder loss, dB: 12 = 1.2 dB | 12 |
 | 35 | 01 = release the relays while the display is off | 00 |
-| **36** | **Tuning search**: 00 = N7DDC's original, anything else = log grid search | FF (log grid) |
+| 36 | not used (in the `display-buttons-uart` build it chooses the tuning search) | |
 | **37** | **HighSWR limit**: 25 = 2.5, 00 = off, FF = 3.0 | FF (3.0) |
 | FB, FC | Last SWR (low, high byte) | |
 | FD | Last capacitor side, 01 = LC | |
 | FE, FF | Last inductor and capacitor relays | |
 
-Cells 36 and 37 are new in this firmware; on a tuner coming from another
-firmware they read FF, which gives the defaults.
+Cell 37 is new in this firmware; on a tuner coming from another firmware
+it reads FF, which gives the default.
 
-## Tuning searches
+## Tuning search
 
-N7DDC's search steps the inductors from zero in coarse jumps (about
-600 nH), at each step sweeps the capacitors, and moves on only while the
-SWR keeps improving. It then fine-tunes L and C one at a time. It is fast,
-but it often stops short, mostly on the upper bands, where the right values
-are small and fall between its coarse steps.
+With no capacitor switched in, the relays only add an inductance in series
+with the antenna, and the SWR along L then follows a parabola exactly (in
+the right units: s = (1 + |Γ|²) / (1 − |Γ|²)). The parabola's shape gives
+the antenna's resistance, its reactance and the frequency. Capacitors
+alone do the same. So the search:
 
-The log grid search tries L and C on a logarithmic grid (relay values
-0, 1, 2, 3, 4, 6, 8, 11, 16, 22, 32, 45, 64, 90, 127, for both capacitor
-sides), skipping the rest of a row once the SWR has passed its dip, and
-then fine-tunes L and C together. New best readings are measured twice, so
-detector noise does not mislead it.
+1. measures 7 settings: no relays, three inductances alone, three
+   capacitances alone;
+2. fits the parabola along each line and measures where it has its
+   bottom, and at 3/4 and 4/3 of that: those readings tell the most;
+3. calculates the antenna from each line (two answers each, R and
+   2500/R), and for each answer the exact match with the capacitors on
+   either side, and measures those settings;
+4. refines the best: it fits a bowl to the SWR on a 3×3 patch around it
+   (steps of a quarter of L and C), jumps to the bowl's bottom, and halves
+   the steps when nothing is better, down to single relays;
+5. if that ends above SWR 1.3 (an antenna the calculation cannot reach,
+   such as a very sharp one), it tries a 7×7 grid on both capacitor sides
+   and refines from the grid's three best points the same way.
+
+New best readings are measured twice and averaged, so detector noise does
+not mislead it. When L and C both change, the relays settle once, not
+twice.
+
+The PIC has almost no room for floating point code (every float operation
+costs 20 to 40 words), so the formulas are short byte programs for a small
+calculator in the firmware (`m_calc` in `main.h`). The power and
+efficiency maths run on it too, which made the room.
 
 In the simulator, over about 1100 antenna loads from 160 to 10 m that the
-relays can match below SWR 1.5, with 1% detector noise:
+relays can match below SWR 1.5, at 10 W with 1% detector noise, on a
+tuner as built (parts a few % off their values, stray capacitance, coil
+loss, detector diodes that differ from N7DDC's table):
 
-| | N7DDC original | Log grid search |
-|---|---|---|
-| Tuned below SWR 1.5 | 45% | 91% |
-| Of loads starting below SWR 10 | 64% | 98% |
-| Left at SWR 2 or worse | 44% | 5.5% |
-| Typical tune time | about 1.5 s | about 4.5 s |
+| | N7DDC original | Log grid search (earlier builds) | This search |
+|---|---|---|---|
+| Tuned below SWR 1.5 | 52% | 91% | 96% |
+| Of loads starting below SWR 10 | 70% | 98% | 100% |
+| Left at SWR 2 or worse | 38% | 4.1% | 2.6% |
+| Average tune time | 1.4 s | 3.7 s | 1.5 s |
+| 9 tunes in 10 within | 3.4 s | 8.2 s | 3.1 s |
 
-The simulator's antenna and detector are idealised, so these numbers need
-confirming on the air. Compare the two on your own antennas by switching
-cell 36: `atu100.py --search original` and `--search grid`.
+The times include the PIC's own calculating, measured in a cycle-exact PIC
+simulator, which the firmware simulator does not count. With ideal relays
+the three find 45%, 90% and 96%. Tune with 5 to 10 W: below about 2 W the
+reflected power detector cannot see small mismatches, and every search
+stops short (this one at about 1.5 W: 61% below SWR 1.5).
+
+This build has only this search. N7DDC's and the log grid search are in
+the `display-buttons-uart` build, selected by cell 36. How the search was
+found, and every method tried: [research/tuning](research/tuning/README.md).
 
 ## atutop
 
@@ -337,22 +364,22 @@ served by the ESP32 bridge ([below](#atutop-in-a-web-browser)).
   and its history. The box flashes **HIGH SWR** on the alarm. Under 1 W it
   says "not measured": N7DDC's firmware measures the SWR from 1 W up.
 - **tuner**: inductance, capacitance, capacitor side, detector voltages,
-  auto, bypass, the tuning search, the HighSWR limit (− and + buttons),
-  "Tunes from" and the detector winding.
+  auto, bypass, the HighSWR limit (− and + buttons), "Tunes from" and the
+  detector winding.
 - **relays**: every inductor and capacitor; lit ones are switched in.
   **Click one to switch it**, click the LC/CL chip to move the capacitors.
 - **events**: tunes, resets, alarms, the link, with times.
 - While tuning, the power box shows **TUNING · transmit a carrier**.
 
-Mouse: click the buttons at the bottom, the relays, Auto, Bypass, Search,
+Mouse: click the buttons at the bottom, the relays, Auto, Bypass,
 Detector, Tunes from or Winding; the − and + buttons or the wheel on
 HighSWR change the limit. Boxes close with Esc or a click on "Esc to close
 ✕" in their top right corner.
 
 Keys: `t` tune (again during a tune: stop it), `b` bypass, `a` auto, `r`
-reset, `s` status, `v` detector voltages once a second, `g` tuning search,
-`[` `]` HighSWR limit, `o` network settings, `e` ATU-100 settings, `c`
-connect screen, `q` quit.
+reset, `s` status, `v` detector voltages once a second, `[` `]` HighSWR
+limit, `o` network settings, `e` ATU-100 settings, `c` connect screen, `q`
+quit.
 
 ```
 atutop                          # the connect screen ($ATU100_PORT skips it)
@@ -487,7 +514,6 @@ fills with mouse codes.
 ./atu100.py -c m                       show everything the tuner sends, until Ctrl-C
 ./atu100.py -c x                       restart the tuner
 ./atu100.py --swr-alarm 2.5            HighSWR limit (0 = off)
-./atu100.py --search original          N7DDC's search (grid for the new one)
 ./atu100.py -c I -r 2 / -c i -r 2      inductor relay 2 on / off
 ./atu100.py -c C -r 0 / -c c -r 0      capacitor relay 0 on / off
 ./atu100.py -c l / -c f                capacitors on the antenna / transmitter side
@@ -554,7 +580,7 @@ Status, the whole EEPROM and the settings decoded:
 │0f: Normal ind relays  30: Measure to 999 W   ││a-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
 │31: Tandum match 1:10  33: Efficeny indication││b-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
 │34: Feed loss 1:1.2    35: Disable relays 0   ││c-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
-│36: Log grid search    37: HighSWR at 2.0     ││d-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
+│37: HighSWR at 2.0                            ││d-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
 │fb: Last SWR 0:0       fd: Last SW 1          ││e-  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff│
 │fe: Last inductor 0    ff: Last capacitor 0   ││f-  ff ff ff ff ff ff ff ff ff ff ff 00 00 01 00 00│
 └──────────────────────────────────────────────┘└───────────────────────────────────────────────────┘
@@ -656,12 +682,13 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15616 of 16384 program words (95%) and 656 of 1024
-bytes of RAM.
+The firmware uses 16364 of 16384 program words (99.9%) and 915 of 1024
+bytes of RAM. That is close to full: new code has to make room for
+itself.
 
 The PIC has a 16-level hardware call stack and restarts when it overflows,
 which no PC simulator can show. `build.sh` reads XC8's estimate of the
-deepest call chain from the listing, prints it (now 14 of 16, with the
+deepest call chain from the listing, prints it (now 15 of 16, with the
 serial interrupt) and fails the build above 16. Tunes asked for by the
 button or over serial therefore start from the main loop, not from inside
 the button or serial code.
@@ -687,8 +714,8 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   the HighSWR and HighPower alarms (one alarm, not one per CW dit), an auto
   tune reporting the high SWR before it starts, the remains of a damaged
   message ignored, a Value without its Set refused, live settings, the
-  watchdog and serial framing. Then it compares the two tuning searches
-  over about 1100 antenna loads.
+  watchdog and serial framing. Then it runs the tuning search over about
+  1100 antenna loads, on ideal relays and on a tuner as built.
 - Serial margin: the PIC samples each bit 2 to 3 ticks of its 4× clock
   after the edge, so it copes with the other side's clock from 2.5% fast
   to 3.5% slow. The PIC's own clock is within 2%; the Mega and the ESP32
@@ -722,7 +749,7 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938`:
 | File | Contents |
 |---|---|
 | `main.c` | start-up, buttons, display text, serial commands and status |
-| `main.h` | measuring power and SWR, relays, both tuning searches |
+| `main.h` | measuring power and SWR, relays, the calculator, the tuning search |
 | `uart.c` | serial port: Timer2 interrupt at 4 × 4800 baud, buffers |
 | `json.c` | JSON out, and a small parser for what comes in |
 | `oled_control.c`, `font5x8.h` | display drivers: OLEDs, 1602 LCD, two-colour LED |
@@ -779,7 +806,7 @@ Each project started from the one before it:
 6. **[randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote)**,
    branch `display-buttons-uart` (this): Randal Warren, VE7NHW. Display and
    buttons back (WA1RCT's XC8 display code), serial on the Tx_req pins,
-   the log grid tuning search, HighSWR and HighPower alarms, detector
+   the log grid and model tuning searches, HighSWR and HighPower alarms, detector
    readings, live settings, bug fixes, atutop (terminal and browser), the
    ESP32 bridge, the updated Python tools, the Arduino sketch and the
    simulators.

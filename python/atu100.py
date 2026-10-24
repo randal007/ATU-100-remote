@@ -66,7 +66,6 @@ class cell:
     EEPROM_ADDITIONAL_INDICATION    = 0x33
     EEPROM_FEEDER_LOSS              = 0x34
     EEPROM_DISABLE_RELAYS           = 0x35
-    EEPROM_TUNE_MODE                = 0x36  # 0 = N7DDC's search, else log grid search
     EEPROM_SWR_ALARM                = 0x37  # HighSWR limit, BCD SWR x 10, 0 = off, ff = 3.0
 
     EEPROM_LAST_SWR_L               = 0xfb
@@ -342,9 +341,6 @@ class atu100(object):
         self.seteepromdata(cell.EEPROM_SWR_ALARM, (tenths // 10) * 16 + tenths % 10)
 
 
-    def set_tune_search(self, original):
-        # True for N7DDC's original search, False for the log grid search
-        self.seteepromdata(cell.EEPROM_TUNE_MODE, 0 if original else 1)
 
 
     def update(self, rxmsg):
@@ -513,7 +509,6 @@ class atu100(object):
                 raise argparse.ArgumentTypeError('1.1 to 9.9, or 0 for off')
             return value
         parse_config.add_argument('--swr-alarm', type=swr_limit, help = 'Set the HighSWR event limit, 1.1 to 9.9, e.g. 2.5, or 0 for off')
-        parse_config.add_argument('--search', choices=['grid', 'original'], help = "Set the tuning search: grid (default) or N7DDC's original")
 
         self.args = parser.parse_args()
 
@@ -533,15 +528,10 @@ class atu100(object):
 
         # Get information from the tuner
 
-        if self.args.swr_alarm is not None or self.args.search:
-            if self.args.swr_alarm is not None:
-                print(f'HighSWR limit: {self.args.swr_alarm:.1f}' if self.args.swr_alarm else 'HighSWR event off')
-                self.set_swr_alarm(self.args.swr_alarm)
-                self.wait_name(f'{cell.EEPROM_SWR_ALARM:02x}')
-            if self.args.search:
-                print(f'Tuning search: {self.args.search}')
-                self.set_tune_search(self.args.search == 'original')
-                self.wait_name(f'{cell.EEPROM_TUNE_MODE:02x}')
+        if self.args.swr_alarm is not None:
+            print(f'HighSWR limit: {self.args.swr_alarm:.1f}' if self.args.swr_alarm else 'HighSWR event off')
+            self.set_swr_alarm(self.args.swr_alarm)
+            self.wait_name(f'{cell.EEPROM_SWR_ALARM:02x}')
             return
 
         if self.args.command == 'a':

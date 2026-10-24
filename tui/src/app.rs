@@ -7,7 +7,7 @@
 use crate::cells::{self, Kind as CellKind, CELLS};
 use crate::connect;
 use crate::esp::{Esp, PROBE};
-use crate::tuner::{alarm_bcd, Kind, Tuner, CELL_MIN_POWER, CELL_SWR_ALARM, CELL_TUNE_MODE, CELL_WINDING};
+use crate::tuner::{alarm_bcd, Kind, Tuner, CELL_MIN_POWER, CELL_SWR_ALARM, CELL_WINDING};
 use crate::ui::{self, Action, Hits};
 use ratatui::Frame;
 use std::collections::VecDeque;
@@ -459,7 +459,6 @@ impl Core {
                 Key::Char('r') => Some(Action::Reset),
                 Key::Char('s') => Some(Action::Status),
                 Key::Char('v') => Some(Action::Detector),
-                Key::Char('g') => Some(Action::Search),
                 Key::Char(']') | Key::Char('+') => Some(Action::AlarmUp),
                 Key::Char('[') | Key::Char('-') => Some(Action::AlarmDown),
                 Key::Char('o') | Key::F(2) => Some(Action::Settings),
@@ -691,12 +690,6 @@ impl Core {
             Action::Side => {
                 t.order_lc = !t.order_lc;
                 out.push(format!(r#"{{"RelayC": {}}}"#, t.cap_bits as u16 | if t.order_lc { 128 } else { 0 }));
-            }
-            Action::Search => {
-                let to_original = t.search_original() != Some(true);
-                t.eeprom[CELL_TUNE_MODE] = Some(if to_original { 0 } else { 1 });
-                out.push(format!(r#"{{"Set": {CELL_TUNE_MODE}, "Value": {}}}"#, if to_original { 0 } else { 1 }));
-                t.log(if to_original { "Tuning search: N7DDC original" } else { "Tuning search: log grid" }, Kind::Info);
             }
             Action::AlarmUp | Action::AlarmDown => {
                 // 0 = off, 1.1 to 9.9 in steps of 0.1
