@@ -171,12 +171,16 @@ the display-off timer (cell 32).
 **4800 baud, 8N1**, 5 V TTL. Lines end with `\n`.
 
 - The tuner sends one JSON object per line.
-- Messages to the tuner are JSON objects, one or more fields, any
-  whitespace, **one message per line**: `{"Tune": true}`. The tuner answers
-  within a few ms (it breaks off a measurement when a message starts
-  arriving) and buffers 128 characters. If characters are lost, it drops the
-  damaged message instead of acting on part of it. Waiting for each answer
-  before sending the next command is still the safe way.
+- Messages to the tuner are JSON objects, one or more fields, spaces
+  anywhere, **one message per line**: `{"Tune": true}` (a line break
+  inside a message drops it). The tuner answers within a few ms (it breaks
+  off a measurement when a message starts arriving) and buffers 128
+  characters. If characters are lost, even because more came than fit in
+  the buffer, it drops the damaged message instead of acting on part of it.
+  Waiting for each answer before sending the next command is still the
+  safe way.
+- Numbers are whole and 0 to 255 (a cell, a byte, relay bits). Anything
+  else, negative or too big, is refused with `Error`.
 - Straight after power up the first measurement takes about half a second;
   a status asked for before then shows no power.
 - A single letter **alone on a line** works like the buttons, for typing in
@@ -208,7 +212,7 @@ the display-off timer (cell 32).
 
 | Event | When |
 |---|---|
-| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.1, Oct 23 2026"}`: the firmware's revision and build date, shown at the top of atutop |
+| `Startup` | power up, followed by `{"Board":"ATU-100_EXT","Credit":"N7DDC","FW":"3.2","Build":"VE7NHW display+serial 1.1.1, Oct 24 2026"}`: the firmware's revision and build date, shown at the top of atutop |
 | `Restart` | the watchdog restarted the tuner |
 | `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal. Any waiting status goes out first, so after an auto tune starts the high SWR that started it has already been reported |
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
@@ -217,7 +221,7 @@ the display-off timer (cell 32).
 | `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). With the reading: `{"Event":"HighPower","Power":120.4}`. Sent again only after the power has stayed 10% below the limit, or off, for about 2 seconds |
 | `Overload` | more power than the detector can measure |
 | `Error` | a command the tuner did not understand |
-| `Busy` | a command that arrived while a tune was waiting for carrier, and was not done |
+| `Busy` | a command that arrived during a tune, and was not done |
 
 **Detector voltages**, answer to `{"Raw": true}`, in mV before the diode
 correction: `{"Fwd":2697,"Rev":261}`
@@ -243,12 +247,11 @@ and values.
 | `{"x": true}` | restart the tuner |
 | `{"ESP32": ...}` | ignored: meant for an [ESP32 bridge](#esp32-bridge), which answers it itself. atutop asks every link once, so the tuner stays quiet when there is no bridge |
 
-A tune waits for carrier for up to about a minute. While it waits, the
-tuner still answers `Status` and `Raw` (and `s`). `{"Reset": true}` or
-`{"Tune": true}` (or `r`, `t`) stops the tune and resets the relays, as
-the Tune button does. Any other message is not done and gets a `Busy`
-event. Messages that arrive during the search itself, once the carrier is
-on, are handled when the tune has finished.
+A tune waits for carrier for up to about a minute. All through a tune,
+while it waits and during the search itself, the tuner still answers
+`Status` and `Raw` (and `s`). `{"Reset": true}` or `{"Tune": true}` (or
+`r`, `t`) stops the tune and resets the relays, as the Tune button does.
+Any other message is not done and gets a `Busy` event.
 
 ## Settings (EEPROM cells)
 
@@ -331,13 +334,13 @@ loss, detector diodes that differ from N7DDC's table):
 |---|---|---|---|
 | Tuned below SWR 1.5 | 52% | 91% | 96% |
 | Of loads starting below SWR 10 | 70% | 98% | 100% |
-| Left at SWR 2 or worse | 38% | 4.1% | 2.3% |
+| Left at SWR 2 or worse | 38% | 4.1% | 2.6% |
 | Average tune time | 1.4 s | 3.7 s | 1.5 s |
-| 9 tunes in 10 within | 3.4 s | 8.2 s | 3.2 s |
+| 9 tunes in 10 within | 3.4 s | 8.2 s | 3.1 s |
 
 The times include the PIC's own calculating, measured in a cycle-exact PIC
 simulator, which the firmware simulator does not count. With ideal relays
-the three find 45%, 90% and 95%. Tune with 5 to 10 W: below about 2 W the
+the three find 45%, 90% and 96%. Tune with 5 to 10 W: below about 2 W the
 reflected power detector cannot see small mismatches, and every search
 stops short (this one at about 1.5 W: 61% below SWR 1.5).
 
@@ -373,9 +376,10 @@ Detector, Tunes from or Winding; the − and + buttons or the wheel on
 HighSWR change the limit. Boxes close with Esc or a click on "Esc to close
 ✕" in their top right corner.
 
-Keys: `t` tune, `b` bypass, `a` auto, `r` reset, `s` status, `v` detector
-voltages once a second, `[` `]` HighSWR limit, `o` network settings, `e`
-ATU-100 settings, `c` connect screen, `q` quit.
+Keys: `t` tune (again during a tune: stop it), `b` bypass, `a` auto, `r`
+reset, `s` status, `v` detector voltages once a second, `[` `]` HighSWR
+limit, `o` network settings, `e` ATU-100 settings, `c` connect screen, `q`
+quit.
 
 ```
 atutop                          # the connect screen ($ATU100_PORT skips it)
@@ -411,8 +415,10 @@ a number and **set** it, or tap one of the choices. Type in the values you
 measured for a more accurate L and C, or the values of an unusual build.
 The detector winding goes through its warning box. **ATU-100 EXT
 defaults** (tap twice) sets N7DDC's values for an EXT board, leaving the
-display cells alone (a wrong display setting blanks the screen). Changes
-take effect at once; display settings restart the display.
+display cells alone (a wrong display setting blanks the screen), and the
+detector winding and "Tunes from" (they must match the transformer).
+Changes take effect at once; display settings restart the display. An SWR
+setting takes 1.1 to 9.9, or 0 where 0 means off.
 
 **Power and the detector winding:** the power meter's scale follows the
 tandem match winding (cell 31): 0–100 W for the stock 1:10, 0–40 W for 1:5,
@@ -598,8 +604,9 @@ on Serial1:
 - passes everything between the tuner and the Mega's USB port, so the
   Python tools work through the Mega;
 - keeps the latest SWR, power, relays and detector readings in variables;
-- drives pin 22 high from `Tune` to `Tuned`, in place of the Tx_req signal,
-  to key a low power carrier and keep an amplifier in bypass;
+- drives pin 22 high from `Tune` to `Tuned` (or a reset, or the tuner
+  restarting mid-tune), in place of the Tx_req signal, to key a low power
+  carrier and keep an amplifier in bypass;
 - sets `atuHighSwr` on the `HighSWR` event;
 - has functions for tune, reset, bypass, status, detector readings and
   setting relays.
@@ -634,8 +641,9 @@ It sits between the tuner and everything else:
   can use the tuner off-grid with no other network. Pick a network from
   its setup page, `http://192.168.73.1/setup`. Without anyone on the
   hotspot it tries the saved network every 30 seconds; it closes the
-  hotspot half a minute after joining, unless it is set to **always on**
-  (atutop's network settings, over USB or from the hotspot). Change the
+  hotspot half a minute after joining (or after "always on" is turned
+  off), once nobody is on it, unless it is set to **always on** (atutop's
+  network settings, over USB or from the hotspot). Change the
   password in the firmware (`HOTSPOT_PASS`) if others nearby might have
   read this manual.
 - The hotspot and the home network share one radio, so the hotspot uses
@@ -674,7 +682,7 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 16325 of 16384 program words (99.6%) and 919 of 1024
+The firmware uses 16364 of 16384 program words (99.9%) and 915 of 1024
 bytes of RAM. That is close to full: new code has to make room for
 itself.
 
@@ -697,9 +705,11 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
   registers and runs it against a simulated Arduino on the serial line
   (exact clock and 2% off either way, and 2.5% for one display), the
   buttons, an RF source and an antenna behind the relay network. It makes
-  40 checks for each of three display types (37 with the LED, which has no
+  43 checks for each of three display types (40 with the LED, which has no
   text to check): tuning by serial and button, reset, bypass, auto, relays
-  and the relay fields, messages while a tune waits for carrier, the EEPROM
+  and the relay fields, messages while a tune waits for carrier, a Reset
+  or Tune message stopping a tune at once (also during the search), numbers
+  out of range refused, the EEPROM
   dump with a command arriving during it, power fields, detector readings,
   the HighSWR and HighPower alarms (one alarm, not one per CW dit), an auto
   tune reporting the high SWR before it starts, the remains of a damaged

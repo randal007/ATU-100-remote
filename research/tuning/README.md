@@ -75,7 +75,7 @@ the others two.
 | + readings at each parabola's bottom | 96% | 95% | 2.2% | 1.3 s* (2.0) | yes |
 | + 7×7 grid and bowl as the fallback (no log grid) | 97% | 97% | 1.9% | 0.9 s* (1.9) | yes |
 | Grid and bowl alone, no model (7×7, 3 best) | 93% | 92% | 5.4% | 2.7 s* (3.5) | yes |
-| **The firmware (`firmware.py`, with calculating)** | **96%** | **95%** | **2.1%** | **1.4 s* (3.2)** | **yes: 16325 of 16384 words** |
+| **The firmware (`firmware.py`, with calculating)** | **96%** | **95%** | **2.1%** | **1.4 s* (3.2)** | **yes: 16364 of 16384 words** |
 
 The step from 97% to the firmware's 96% is what the PIC forced: 32-bit
 floats (the closed-form inverse lost 0.6%; elimination without pivoting
@@ -91,13 +91,13 @@ search's own:
 
 | Tuner, power | N7DDC | Log grid | Model search |
 |---|---|---|---|
-| as built, 10 W | 52%, SWR ≥ 2 38%, 1.4 s (3.4) | 91%, 4.1%, 3.7 s (8.2) | **96%, 2.3%, 1.5 s (3.2)** |
-| as built, 5 W | 54%, 37%, 1.3 s (3.2) | 90%, 4.6%, 3.5 s (8.0) | **96%, 2.2%, 1.4 s (2.3)** |
-| ideal, 10 W | 45%, 44%, 1.8 s (4.2) | 90%, 5.6%, 5.1 s (8.7) | **95%, 3.9%, 2.2 s (5.0)** |
+| as built, 10 W | 52%, SWR ≥ 2 38%, 1.4 s (3.4) | 91%, 4.1%, 3.7 s (8.2) | **96%, 2.6%, 1.5 s (3.1)** |
+| as built, 5 W | 54%, 37%, 1.3 s (3.2) | 90%, 4.6%, 3.5 s (8.0) | **96%, 2.1%, 1.4 s (2.8)** |
+| ideal, 10 W | 45%, 44%, 1.8 s (4.2) | 90%, 5.6%, 5.1 s (8.7) | **96%, 3.4%, 2.2 s (5.1)** |
 | ideal, 5 W | 46%, 44%, 1.8 s (4.2) | 91%, 5.3%, 5.1 s (8.8) | **96%, 3.3%, 2.2 s (4.9)** |
 
 Of the loads that start below SWR 10, the model search tunes all below
-1.5 (log grid 98%, N7DDC 70%).
+1.5 but one (log grid 98%, N7DDC 70%).
 
 ## How sure: other tuners and conditions
 

@@ -20,7 +20,7 @@ only (**nothing flashed or used on the air**):
   refine with a 3x3 bowl fit, 7x7 grid + bowl above SWR 1.3. As built,
   10 W: 96% below SWR 1.5 in 1.5 s, against log grid 91% / 3.7 s and
   N7DDC 52% / 1.4 s. Floats run on a byte-code calculator (`m_calc`) to
-  fit: 16325 of 16384 words, 919 bytes RAM, stack 15 of 16. Cell 36
+  fit: 16364 of 16384 words, 915 bytes RAM, stack 15 of 16. Cell 36
   unused; atutop and the Python tools lost the search switch. The whole
   study, every method and the tables: research/tuning/README.md.
   `research/tuning/firmware.py` is the firmware's search in Python (reads
@@ -39,8 +39,8 @@ The rest of this section describes `display-buttons-uart`; on
   event, Raw detector readings, live settings, Busy while a tune waits,
   serial robustness (128 byte buffer, damaged messages dropped), ignores
   `{"ESP32":...}`, RelayI/RelayC in the status, letters only alone on a
-  line. Revision `FW_REVISION` "1.0" in main.c, in the Startup `Build`
-  field. 15535 of 16384 words (95%), 662 bytes RAM, call stack 14 of 16
+  line. Revision `FW_REVISION` "1.0.1" in main.c, in the Startup `Build`
+  field. 15616 of 16384 words (95%), 656 bytes RAM, call stack 14 of 16
   (build.sh checks it). Hex:
   `ATU-100_display_uart_PIC16F1938_20261024.hex` (rebuild + copy with
   every firmware change).
@@ -78,7 +78,14 @@ The rest of this section describes `display-buttons-uart`; on
    upload; check opening the native USB port does not reset it (DTR/RTS),
    Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
    the Mega port.
-4. **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
+4. **Second ultra review** (2026-10-24): 32 findings + ~20 small on PR #1
+   (all fixed except: the display type's two copies, which cannot
+   disagree; the web-origin and hotspot-subnet checks, design questions
+   for a LAN box; the simulator's timing caveats), 7 on PR #2 (the model
+   search). Notable: Reset/Tune messages now stop a tune at any reading,
+   not only while it waits for carrier (else a second tune followed);
+   numbers out of 0-255 refused; atutop waits for each command's own reply.
+   **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
    15 inline findings + 5 small, all real, all fixed except item 11
    (serial sampling point: kept, margin +3.5/-2.5% covers the PIC's 2%;
    explained to him). **Keep display-buttons-uart** (he wants both

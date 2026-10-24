@@ -43,6 +43,7 @@ pub struct Tuner {
     pub fwd_mv: Option<i64>,
     pub rev_mv: Option<i64>,
     pub tuning: bool,
+    pub tuning_since: Option<Instant>, // a lost Tuned must not hold commands for ever
     pub high_swr: bool,
     pub high_power: bool,
     pub build: Option<String>,
@@ -53,6 +54,7 @@ pub struct Tuner {
     pub values_from_tuner: bool,
     pub ind_bits: u8,
     pub cap_bits: u8,
+    pub relays_exact: bool, // the status carries RelayI/RelayC
     pub events: VecDeque<Event>,
     pub power_hist: VecDeque<f64>,
     pub swr_hist: VecDeque<f64>,
@@ -83,6 +85,7 @@ impl Tuner {
             fwd_mv: None,
             rev_mv: None,
             tuning: false,
+            tuning_since: None,
             high_swr: false,
             high_power: false,
             build: None,
@@ -94,6 +97,7 @@ impl Tuner {
             values_from_tuner: false,
             ind_bits: 0,
             cap_bits: 0,
+            relays_exact: false,
             events: VecDeque::new(),
             power_hist: VecDeque::new(),
             swr_hist: VecDeque::new(),
@@ -169,12 +173,14 @@ impl Tuner {
                 "RelayI" => {
                     if let Some(n) = value.as_u64() {
                         self.ind_bits = n as u8 & 0x7f;
+                        self.relays_exact = true;
                     }
                 }
                 "RelayC" => {
                     if let Some(n) = value.as_u64() {
                         self.cap_bits = n as u8 & 0x7f;
                         self.order_lc = n & 0x80 != 0;
+                        self.relays_exact = true;
                     }
                 }
                 "Fwd" => self.fwd_mv = value.as_i64(),
@@ -207,6 +213,7 @@ impl Tuner {
         let kind = match event {
             "Tune" => {
                 self.tuning = true;
+                self.tuning_since = Some(Instant::now());
                 Kind::Warn
             }
             "Tuned" => {
@@ -267,11 +274,17 @@ impl Tuner {
                     self.order_lc = sw == 1;
                 }
             }
-            if let Some(bits) = relays_for(self.ind_nh, &self.ind_values) {
-                self.ind_bits = bits;
-            }
-            if let Some(bits) = relays_for(self.cap_pf, &self.cap_values) {
-                self.cap_bits = bits;
+            // The relays from the totals, now the relay values are known:
+            // only after a status, and only from a firmware without the
+            // exact RelayI/RelayC (the guess fails with linear or measured
+            // values)
+            if self.have_status && !self.relays_exact {
+                if let Some(bits) = relays_for(self.ind_nh, &self.ind_values) {
+                    self.ind_bits = bits;
+                }
+                if let Some(bits) = relays_for(self.cap_pf, &self.cap_values) {
+                    self.cap_bits = bits;
+                }
             }
         }
     }

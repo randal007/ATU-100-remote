@@ -343,7 +343,7 @@ class atu100diag(object):
 
 
     def process_event_msg(self, event):
-        self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'Overload', 'Error') else C_GOOD_DATA)
+        self.update_var('Event', event, C_BAD_DATA if event in atu100.BAD_EVENTS else C_GOOD_DATA)
         if event == 'Tune':
             self.update_var('Tune', 'Tuning', C_WARN_DATA)
         elif event == 'Tuned':

@@ -8,7 +8,8 @@
     - Keeps the latest SWR, power and relay values from the tuner's status
       lines, for the rest of the amplifier code to use.
     - TUNING_PIN is high from the tuner's "Tune" event to its "Tuned"
-      event: the Tx_req signal the tuner used to output itself. Use it to
+      event (or Reset, or a restart of the tuner): the Tx_req signal the
+      tuner used to output itself. Use it to
       key a low power carrier and keep the amplifier in bypass.
     - atuHighSwr is set by the tuner's "HighSWR" event (sent within a few
       ms of the SWR passing the limit in eeprom cell 0x37) and cleared
@@ -49,7 +50,9 @@ void atuLine()
   if (strstr(line, "\"Event\":\"Tune\"")) {
     atuTuning = true;
     digitalWrite(TUNING_PIN, HIGH);
-  } else if (strstr(line, "\"Event\":\"Tuned\"") || strstr(line, "\"Event\":\"Reset\"")) {
+  } else if (strstr(line, "\"Event\":\"Tuned\"") || strstr(line, "\"Event\":\"Reset\"") ||
+             strstr(line, "\"Event\":\"Restart\"") || strstr(line, "\"Event\":\"Startup\"")) {
+    // a tuner that restarted mid-tune sends no Tuned: Restart or Startup ends it
     atuTuning = false;
     digitalWrite(TUNING_PIN, LOW);
   } else if (strstr(line, "\"Event\":\"HighSWR\"")) {

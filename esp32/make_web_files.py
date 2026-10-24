@@ -16,7 +16,10 @@ OUT = os.path.join(HERE, 'atu100_bridge/web_files.h')
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
          '.wasm': 'application/wasm', '.css': 'text/css'}
 
-files = sorted(f for f in os.listdir(DIST) if os.path.splitext(f)[1] in TYPES)
+# Every file under dist, subfolders too (trunk puts wasm-bindgen snippets
+# in snippets/), by its path with / separators
+files = sorted(os.path.relpath(os.path.join(d, f), DIST).replace(os.sep, '/')
+               for d, _, names in os.walk(DIST) for f in names if os.path.splitext(f)[1] in TYPES)
 if 'index.html' not in files:
     sys.exit(f'no index.html in {DIST}: build it with `trunk build --release` in tui/')
 lines = ['// Made by esp32/make_web_files.py from tui/dist: do not edit.',

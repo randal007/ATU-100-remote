@@ -1,10 +1,13 @@
-"""solve9: the model search exactly as the PIC does it (main.h tune_model).
-Kept separate from searches.py so the two can be compared step by step.
+"""The trials that shaped the model search for the PIC (solve9, solve10 and
+their switches): what the PIC cannot afford left out one step at a time,
+and each step checked in the lab. No list of readings (the parabola fits
+keep running sums), no ranking of the candidates by how well they explain
+every reading (all are measured instead), a closed-form bowl fit on full
+3x3 patches, only the last CACHE readings remembered (16 here; the
+firmware keeps 10).
 
-What the PIC cannot afford is left out: no list of readings (the parabola
-fits keep running sums), no ranking of the candidates by how well they
-explain every reading (all are measured instead), a closed-form bowl fit on
-full 3x3 patches, and only the last CACHE readings remembered."""
+This is the exploratory version. firmware.py is the firmware's search
+itself, step for step, with the programs read out of main.h."""
 
 import math
 import lab

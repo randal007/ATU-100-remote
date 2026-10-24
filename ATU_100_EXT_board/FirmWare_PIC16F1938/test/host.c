@@ -724,14 +724,15 @@ static void scenario(void)
             send("{\"Status\": true}\n"); // while the dump is still being sent
             step_time = -secs();
         }
-        if (got("\"ff\":") && got("\"Power\":")) {
+        const char *dump = strstr(from_pic + mark, "{\"00\":");
+        const char *end = dump ? strchr(dump, '\n') : NULL;
+        if (end && strstr(end, "\"Power\":")) { // the dump line, then the status asked for during it
             int cells = 0;
-            const char *dump = strstr(from_pic + mark, "{\"00\":"), *end = strchr(dump, '\n');
             for (const char *p = dump; (p = strstr(p, "\":\"")) != NULL && p < end; p++)
                 cells++;
             snprintf(what, sizeof what, "eeprom dump has 256 cells (got %d)", cells);
             check(cells == 256, what);
-            check(1, "full duplex: status request handled during the dump");
+            check(1, "status request sent during the dump answered after it");
             next();
             fwd_mv = 900;
             z_load = 80 - 60 * I;
@@ -872,7 +873,76 @@ static void scenario(void)
         }
         break;
 
-    case 23:
+    case 23: { // numbers out of range are refused, not wrapped or cut
+        int errors = 0;
+        for (const char *p = from_pic + mark; (p = strstr(p, "\"Event\":\"Error\"")) != NULL; p++)
+            errors++;
+        if (waited(1) && step_time > 0) {
+            send("{\"Set\": 2, \"Value\": -1}\n{\"Set\": 2, \"Value\": 40000}\n");
+            send("{\"Set\": 65537, \"Value\": 5}\n{\"Get\": 300}\n");
+            step_time = -secs();
+        } else if (step_time < 0 && secs() + step_time > 3) {
+            // 65537 twice: its Set, then its Value with no valid Set
+            snprintf(what, sizeof what, "-1, 40000, 65537 and 300 are refused (%d errors)", errors);
+            check(errors == 5 && eeprom[2] == initial_eeprom[2] && eeprom[1] == display_type && !got("\"2c\":"), what);
+            next();
+            send("{\"Set\": 54, \"Value\": 0}\n"); // cell 36: N7DDC's search in builds that have it
+        }
+        break;
+    }
+
+    case 24: { // a Reset during the search itself (the carrier gone) stops it at once
+        static int sub;
+        static double t;
+        if (sub == 0 && waited(1)) {
+            fwd_mv = 900;
+            z_load = 200 + 150 * I;
+            send("{\"Tune\": true}\n");
+            sub = 1;
+        } else if (sub == 1 && got("\"Event\":\"Tune\"")) {
+            t = secs();
+            sub = 2;
+        } else if (sub == 2 && secs() - t > 0.3) {
+            fwd_mv = 0; // carrier gone mid-search: the tune waits for it
+            sub = 3;
+        } else if (sub == 3 && secs() - t > 0.8) {
+            send("{\"Reset\": true}\n");
+            t = secs();
+            sub = 4;
+        } else if (sub == 4 && got("\"Event\":\"Tuned\"")) {
+            check(secs() - t < 2 && got("\"Event\":\"Reset\""), "one Reset stops a tune that waits for carrier mid-search");
+            fwd_mv = 900;
+            next();
+        } else if (sub == 4 && secs() - t > 5)
+            timeout(0, "Reset during a search");
+        break;
+    }
+
+    case 25: { // a Tune message during the search (carrier on) stops it: no second tune after
+        static int sub;
+        static double t;
+        if (sub == 0 && waited(1)) {
+            z_load = 300 - 200 * I;
+            send("{\"Set\": 54, \"Value\": 255}\n{\"Tune\": true}\n"); // cell 36 back to its default; a far-off load
+            sub = 1;
+        } else if (sub == 1 && got("\"Event\":\"Tune\"")) {
+            t = secs();
+            sub = 2;
+        } else if (sub == 2 && secs() - t > 0.3) {
+            send("{\"Tune\": true}\n");
+            t = secs();
+            sub = 3;
+        } else if (sub == 3 && secs() - t > 4) {
+            int tunes = 0;
+            for (const char *p = from_pic + mark; (p = strstr(p, "\"Event\":\"Tune\"")) != NULL; p++)
+                tunes++;
+            check(got("\"Event\":\"Tuned\"") && tunes == 1, "a Tune message during the search stops it, no second tune");
+            next();
+        }
+        break;
+    }
+
+    case 26:
         if (waited(1))
             finish();
         break;

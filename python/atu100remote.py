@@ -312,7 +312,7 @@ class atu100remote(object):
             self.update_var('Detector', f'{atu.fwd_mv}/{atu.rev_mv}')
         if 'Event' in rxmsg:
             event = rxmsg['Event']
-            self.update_var('Event', event, C_BAD_DATA if event in ('HighSWR', 'HighPower', 'Overload', 'Error') else C_GOOD_DATA)
+            self.update_var('Event', event, C_BAD_DATA if event in atu100.BAD_EVENTS else C_GOOD_DATA)
             if event == 'Tune':
                 self.update_var('Tune', 'Tuning', C_WARN_DATA)
             elif event == 'Tuned':
@@ -321,8 +321,8 @@ class atu100remote(object):
                 self.update_var('Tune', ' ')
             elif event == 'HighSWR':
                 self.update_var('SWR', f'{atu.swr:.2f}', C_BAD_DATA)
-        if 'Build' in rxmsg:
-            self.swin.addstr(0, 2, f' ATU-100 Remote, {atu.info.get("Build", "")} ')
+        if 'Build' in rxmsg:  # cut to the window, inside its corners
+            self.swin.addnstr(0, 2, f' ATU-100 Remote, {atu.info.get("Build", "")} ', SCREEN_WIDTH - 4)
 
 
     def main(self, stdscr):
@@ -334,9 +334,11 @@ class atu100remote(object):
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
         print('\033[?1003h')
 
-        # Get inital information from the tuner
+        # Get inital information from the tuner: the status, and the
+        # HighSWR limit for the SWR's colour
 
         self.atu.sendbool('Status', True)
+        self.atu.geteepromdata(atu100.cell.EEPROM_SWR_ALARM)
 
         #
         # Loop processing key presses, send polls and update battery voltage etc

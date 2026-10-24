@@ -36,6 +36,7 @@ try:
         for celladdress in range(0x100):
             eeprom.append(0xff)
 
+        ended = False
         for line in hexfile:
             line = line.strip()
             if not line:
@@ -74,6 +75,7 @@ try:
                             jsonfile.write(f'    "{celladdress:02x}": "{eeprom[celladdress]:02x}"\n')
                     jsonfile.write('}\n')
                 print(f'Created {sys.argv[2]}')
+                ended = True
                 break       # end of file record
 
             elif rectype == 4:
@@ -87,4 +89,7 @@ except Exception as e:
     print(f'Error: {e}')
     sys.exit(10)
 
+if not ended:
+    print('No end of file record: the hex file is cut short, nothing written')
+    sys.exit(40)
 print('Extraction complete')

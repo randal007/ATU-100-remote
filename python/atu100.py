@@ -32,6 +32,10 @@ from time import sleep, time
 
 
 
+# Events shown in red by the remote and the diagnostics
+BAD_EVENTS = ('HighSWR', 'HighPower', 'Overload', 'Error')
+
+
 class cell:
     EEPROM_DISPLAY_I2C_ADDR         = 0x00
     EEPROM_DISPLAY_TYPE             = 0x01
@@ -102,6 +106,7 @@ class atu100(object):
         self.eeprom      = []
         for address in range(0x100):
             self.eeprom.append(0xff)
+        self.eeprom_known = set()   # cells read from the tuner (the rest are guesses)
         self.value_cap   = [0, 0, 0, 0, 0, 0, 0]
         self.value_ind   = [0, 0, 0, 0, 0, 0, 0]
 
@@ -219,6 +224,13 @@ class atu100(object):
             while (rxd):
                 ch = rxd.decode('ascii', errors='replace')
                 logging.debug(f'Got {ch}')
+                if ch == '{':  # a new message: the last one lost its end
+                    logging.warning(f'Damaged JSON dropped: [{self.json_buffer}]')
+                    self.json_buffer = ''
+                elif ch in '\r\n':  # the tuner's messages are one line each
+                    logging.warning(f'Damaged JSON dropped: [{self.json_buffer}]')
+                    self.json_active = False
+                    return None
                 self.json_buffer += ch
                 if ch == '}':
                     logging.debug('JSON ended')
@@ -246,6 +258,7 @@ class atu100(object):
                                     # We have a EEPROM cell value, save it and use to get setting info
 
                                     self.eeprom[cell_address] = cell_data
+                                    self.eeprom_known.add(cell_address)
                                     if (cell_address >= cell.EEPROM_INDUCTOR_FIRST) and (cell_address <= cell.EEPROM_INDUCTOR_LAST):
                                         offset = cell_address - cell.EEPROM_INDUCTOR_FIRST
                                         highbyte = (offset % 2) == 0
@@ -349,8 +362,11 @@ class atu100(object):
             elif name == 'SWR':
                 self.swr = value
                 limit = self.swr_alarm()
-                if limit and value < limit - 0.1:
-                    self.high_swr = False
+                # Red while the SWR is at the limit. 0.00 is no power (a gap
+                # between CW dits): keep the colour. Unknown limit: the
+                # HighSWR event alone decides
+                if limit and value > 0:
+                    self.high_swr = value >= limit
             elif name == 'Order':
                 self.order = value
                 self.relay_order = value == 'LC'
@@ -403,6 +419,8 @@ class atu100(object):
 
     def swr_alarm(self):
         # HighSWR limit from the EEPROM copy, None when not known or off
+        if cell.EEPROM_SWR_ALARM not in self.eeprom_known:
+            return None
         bcd = self.eeprom[cell.EEPROM_SWR_ALARM]
         if bcd == 0xff:
             return 3.0
@@ -446,8 +464,8 @@ class atu100(object):
                       " 'A' - Enable auto tuning\n"
                       " 'b' - Disable bypass\n"
                       " 'B' - Enable bypass\n"
-                      " 'c' - Capacitor relay on\n"
-                      " 'C' - Capacitor relay off\n"
+                      " 'c' - Capacitor relay off\n"
+                      " 'C' - Capacitor relay on\n"
                       " 'd' - Download EEPROM contents from ATU-100\n"
                       " 'f' - Capacitor first\n"
                       " 'g' - Get an EEPROM cell\n"
@@ -485,7 +503,12 @@ class atu100(object):
         parse_config.add_argument('-a', '--address', default='', help = 'EEPROM address for get or set commands')
         parse_config.add_argument('-d', '--data', default='', help = 'EEPROM data for set command')
         parse_config.add_argument('-r', '--relay', default=0, help = 'Relay number, 0 to 6')
-        parse_config.add_argument('--swr-alarm', type=float, help = 'Set the HighSWR event limit, e.g. 2.5, or 0 for off')
+        def swr_limit(text):
+            value = float(text)
+            if value != 0 and not 1.1 <= value <= 9.9:
+                raise argparse.ArgumentTypeError('1.1 to 9.9, or 0 for off')
+            return value
+        parse_config.add_argument('--swr-alarm', type=swr_limit, help = 'Set the HighSWR event limit, 1.1 to 9.9, e.g. 2.5, or 0 for off')
 
         self.args = parser.parse_args()
 
@@ -671,6 +694,13 @@ class atu100(object):
                     continue
 
                 # EEPROM Dump command
+
+                # A status line may come first while there is power: wait
+                # for the answer itself
+                if self.args.command == 'd' and 'ff' not in rxmsg:
+                    continue
+                if self.args.command in ('g', 's') and f'{int(self.args.address, 16):02x}' not in rxmsg:
+                    continue
 
                 if self.args.command == 'd':
                     print(json.dumps(rxmsg, indent=4))

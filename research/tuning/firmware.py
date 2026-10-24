@@ -256,7 +256,7 @@ class Firmware:
         if fixed:
             return fixed
         if v == 0:
-            return 2
+            return 1 if dv > 4 else 2
         v = ((v + dv // 2) & 0xFF) // dv
         return v or 1
 
@@ -304,6 +304,7 @@ class Firmware:
             jump += 1
 
     def line(self, line, code, sw):
+        code = min(code, self.c_max if line else self.l_max)  # 5 or 6 relays: no 64
         return self.measure(0 if line else code, code if line else 0, sw, False)
 
     def grid(self):

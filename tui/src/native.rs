@@ -34,7 +34,7 @@ struct Shell {
     sim: Option<connect::Simulator>,   // started from the connect screen
     web_check: Option<std::sync::mpsc::Receiver<Option<String>>>,
     last_retry: Instant,
-    last_web: Instant,
+    last_web: Option<Instant>, // None: check soon
     /// A port being opened in the background (a TCP connect can take
     /// seconds): the port, whether it is a new one, the result to come
     opening: Option<(String, bool, std::sync::mpsc::Receiver<Result<Link, String>>)>,
@@ -73,7 +73,7 @@ pub fn main() {
         sim: None,
         web_check: None,
         last_retry: Instant::now(),
-        last_web: Instant::now() - Duration::from_secs(60),
+        last_web: None,
         opening: None,
     };
     match port {
@@ -94,6 +94,12 @@ pub fn main() {
 
     let mut terminal = ratatui::init();
     let _ = execute!(stdout(), EnableMouseCapture);
+    // ratatui's panic hook restores the terminal but not the mouse
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(stdout(), DisableMouseCapture);
+        hook(info);
+    }));
     let result = run(&mut terminal, &mut core, &mut shell);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -127,8 +133,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, core: &mut Core, shell: &mut She
         let urls = core.app.esp.web_urls();
         if urls.is_empty() {
             core.app.web_reach = None;
-        } else if shell.web_check.is_none() && shell.last_web.elapsed() >= Duration::from_secs(10) {
-            shell.last_web = Instant::now();
+        } else if shell.web_check.is_none() && shell.last_web.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+            shell.last_web = Some(Instant::now());
             shell.web_check = Some(check_web(urls));
         }
         let link = &mut shell.link;
@@ -288,8 +294,10 @@ fn opened(core: &mut Core, shell: &mut Shell, port: String, moving: bool, result
                 Some(c) => c.error = Some(e),
                 None => core.app.esp.notice = Some((format!("cannot connect: {e}"), true)),
             }
-            if !core.app.port.is_empty() && core.app.connect.is_none() {
-                core.app.link_error = Some("not connected".into()); // try the old port again
+            if !core.app.port.is_empty() {
+                // the old link was let go: try its port again, also while
+                // the connect screen is still open
+                core.app.link_error = Some("not connected".into());
             }
         }
         Err(e) => core.app.link_error = Some(e),

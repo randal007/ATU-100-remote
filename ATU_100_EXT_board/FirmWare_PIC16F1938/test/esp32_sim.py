@@ -16,8 +16,8 @@ Wi-Fi settings) until the bridge has joined a network.
 It behaves as the real bridge firmware does (README.md, "ESP32 bridge"):
 lines are passed whole between the tuner and every client; lines with an
 "ESP32" field are answered here and never reach the tuner; Wi-Fi settings
-change over USB only; {"ESP32":"Find"} on UDP port 7001 is answered with
-where to connect. A fixed IP address is kept and reported, but the bridge
+change over USB or from the hotspot; {"ESP32":"Find"} on UDP port 7001 is
+answered with where to connect (on the home network, or on the hotspot). A fixed IP address is kept and reported, but the bridge
 stays on 127.0.0.1 here. Pretend networks: VE7NHW-shack (password hamradio),
 two others with unknown passwords, and an open one.
 
@@ -74,6 +74,12 @@ ADDRESS = lan_address() if LAN else '127.0.0.1'  # where the bridge says it is
 HOST = 'atu100.local'
 HOTSPOT = 'ATU100-setup'
 HOTSPOT_IP = '192.168.73.1'  # pretend: nothing listens there on this PC
+HOTSPOT_LINGER = 30  # s the hotspot stays up after joining, as on the board
+
+
+def valid_ip(text):
+    parts = text.split('.')
+    return len(parts) == 4 and all(p.isdigit() and int(p) < 256 for p in parts)
 NETWORKS = [  # SSID, RSSI, password (None = open)
     ('VE7NHW-shack', -47, 'hamradio'),
     ('TELUS4471', -71, '?'),
@@ -247,6 +253,7 @@ class Bridge:
         self.since = time.time()
         self.hotspot = True        # nothing saved yet: hotspot for setup
         self.hotspot_always = False
+        self.hotspot_off_at = None # the hotspot lingers after joining, as on the board
         self.scan_due = []         # clients waiting for a scan
 
     # Wi-Fi as the real firmware does it, with pretend timings
@@ -257,20 +264,23 @@ class Bridge:
             net = next((n for n in NETWORKS if n[0] == ssid), None)
             if net and (net[2] is None or net[2] == password):
                 self.state, self.since = 'Connected', now
-                self.hotspot = self.hotspot_always
+                if self.hotspot and not self.hotspot_always:
+                    self.hotspot_off_at = now + HOTSPOT_LINGER  # time for the setup page to say so
                 print(f'Wi-Fi: connected to {ssid}', flush=True)
             elif now - self.since > 6:
                 self.state, self.since, self.hotspot = 'Failed', now, True
                 print(f'Wi-Fi: cannot join {ssid}, hotspot on', flush=True)
         elif self.state == 'Failed' and now - self.since > 30:
             self.state, self.since = 'Connecting', now  # keep trying
+        if self.hotspot_off_at and now > self.hotspot_off_at and self.state == 'Connected':
+            self.hotspot, self.hotspot_off_at = self.hotspot_always, None
         for client, due in list(self.scan_due):
             if now >= due:
                 self.scan_due.remove((client, due))
                 for ssid, rssi, password in NETWORKS:
                     self.reply(client, {'ESP32': 'Net', 'SSID': ssid, 'RSSI': rssi, 'Secure': password is not None})
                 self.reply(client, {'ESP32': 'Scan', 'Count': len(NETWORKS)})
-        if self.state != 'Connected':
+        if self.state != 'Connected' and not self.hotspot:
             for c in list(self.wifi_clients):
                 self.drop(c)
 
@@ -314,11 +324,11 @@ class Bridge:
         return Page
 
     def client_name(self, client):
-        """What the bridge calls a client: a browser is on the hotspot until
-        the bridge has joined a network"""
+        """What the bridge calls a client: a network client is on the
+        hotspot until the bridge has joined a network"""
         if client is self.usb:
             return 'USB'
-        if isinstance(client, WsClient) and self.state != 'Connected':
+        if self.state != 'Connected':
             return 'Hotspot'
         return 'WiFi'
 
@@ -354,8 +364,15 @@ class Bridge:
             self.reply(client, {'ESP32': 'Error', 'Text': 'Wi-Fi settings change over USB or the hotspot only'})
         elif cmd == 'WiFi':
             ssid = str(msg.get('SSID', ''))
-            if not ssid:
+            if not ssid or len(ssid.encode()) > 32:  # bytes, as the bridge counts
                 self.reply(client, {'ESP32': 'Error', 'Text': 'no network name'})
+                return
+            if 'Pass' in msg and len(str(msg['Pass']).encode()) > 63:
+                self.reply(client, {'ESP32': 'Error', 'Text': 'password too long'})
+                return
+            if msg.get('IP') and not all(valid_ip(str(msg.get(k, d))) for k, d in
+                                         (('IP', ''), ('Gateway', ''), ('Mask', '255.255.255.0'))):
+                self.reply(client, {'ESP32': 'Error', 'Text': 'the IP address, gateway or mask is not valid'})
                 return
             if 'Pass' in msg:
                 password = str(msg['Pass'])
@@ -373,12 +390,12 @@ class Bridge:
             self.reply(client, {'ESP32': 'OK', 'Text': f'saved, joining {ssid}'})
         elif cmd == 'Hotspot':
             self.hotspot_always = bool(msg.get('Always'))
-            if self.hotspot_always:
-                self.hotspot = True
-            elif self.state == 'Connected':
-                self.hotspot = False
             self.reply(client, {'ESP32': 'OK', 'Text': 'hotspot always on' if self.hotspot_always
                                 else 'hotspot only when there is no network'})
+            if self.hotspot_always:
+                self.hotspot = True
+            elif self.state == 'Connected' and self.hotspot:
+                self.hotspot_off_at = time.time() + HOTSPOT_LINGER  # the asker may be on it
         elif cmd == 'Forget':
             self.saved, self.state, self.hotspot, self.static = None, 'Off', True, None
             self.reply(client, {'ESP32': 'OK', 'Text': 'Wi-Fi forgotten, hotspot on'})
@@ -398,8 +415,9 @@ class Bridge:
                 msg = None
             if isinstance(msg, dict) and 'ESP32' in msg:
                 self.command(client, msg)
-            else:
+            elif client is self.usb or text.startswith(b'{'):
                 os.write(self.tuner, text + b'\n')  # whole lines only
+            # else dropped: only USB may type the single letters
 
     def from_tuner(self, data):
         self.tuner_buf += data
@@ -428,15 +446,17 @@ class Bridge:
                         ask = json.loads(data)
                     except ValueError:
                         continue
-                    if isinstance(ask, dict) and ask.get('ESP32') == 'Find' and self.state == 'Connected':
-                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': ADDRESS, 'Port': self.port,
-                                'Host': HOST, 'SSID': self.saved[0]}
+                    connected = self.state == 'Connected'
+                    if isinstance(ask, dict) and ask.get('ESP32') == 'Find' and (connected or self.hotspot):
+                        here = {'ESP32': 'Here', 'Version': VERSION, 'IP': ADDRESS if connected else HOTSPOT_IP,
+                                'Port': self.port, 'Host': HOST,
+                                'SSID': self.saved[0] if connected else HOTSPOT}
                         self.finder.sendto(json.dumps(here, separators=(',', ':')).encode(), addr)
                 elif what == 'tuner':
                     self.from_tuner(os.read(self.tuner, 4096))
                 elif what == 'server':
                     sock, addr = self.server.accept()
-                    if self.state != 'Connected' or len(self.wifi_clients) >= 2:
+                    if (self.state != 'Connected' and not self.hotspot) or len(self.wifi_clients) >= 2:
                         sock.close()
                         continue
                     c = Client('WiFi', sock=sock)
@@ -470,7 +490,10 @@ class Bridge:
                     if data:
                         self.from_client(self.usb, data)
                 else:
-                    data = what.sock.recv(4096)
+                    try:
+                        data = what.sock.recv(4096)
+                    except OSError:  # reset by the other end
+                        data = b''
                     if data:
                         self.from_client(what, data)
                     else:

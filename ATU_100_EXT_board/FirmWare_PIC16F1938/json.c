@@ -2,7 +2,8 @@
 #include "uart.h"
 
 /*  Messages from the tuner are one line each: {"Name":value,...}\n
-    Messages to the tuner may contain any whitespace, e.g. {"Tune": true} */
+    Messages to the tuner are one line each too; spaces and tabs may go
+    anywhere, e.g. {"Tune": true}. A line break inside a message drops it */
 
 char json_rx_name[JSON_MAX_STR];
 bool json_rx_bool;
@@ -148,12 +149,17 @@ json_rx_result_t json_rx_process(char rx)
         } else if (rx >= '0' && rx <= '9') {
             json_rx_int = rx - '0';
             json_rx_state = JRS_INT;
+        } else if (rx == '-') {
+            json_rx_int = -1; // no negative values: refused as -1
+            json_rx_state = JRS_INT;
         }
         break;
 
     case JRS_INT:
         if (rx >= '0' && rx <= '9') {
-            json_rx_int = json_rx_int * 10 + rx - '0';
+            // past 2999 it stays 30000 (16-bit int): refused, not wrapped
+            if (json_rx_int >= 0)
+                json_rx_int = json_rx_int < 3000 ? json_rx_int * 10 + rx - '0' : 30000;
             break;
         }
         // The character after a number may be the closing brace

@@ -25,10 +25,19 @@ enum Incoming {
     Closed(String),
 }
 
+/// The WebSocket's callbacks, kept for as long as their socket (leaked,
+/// a reconnect every few seconds while the bridge is off adds up)
+struct Handlers {
+    _open: Closure<dyn FnMut()>,
+    _message: Closure<dyn FnMut(MessageEvent)>,
+    _close: Closure<dyn FnMut()>,
+}
+
 /// The WebSocket to the bridge, opened again when it drops
 struct WebLink {
     url: String,
     ws: Option<WebSocket>,
+    handlers: Option<Handlers>,
     inbox: Rc<RefCell<VecDeque<Incoming>>>,
     closed_at: Option<Instant>,
     ever_open: bool,
@@ -37,6 +46,14 @@ struct WebLink {
 impl WebLink {
     fn connect(&mut self) {
         self.closed_at = None;
+        if let Some(old) = self.ws.take() {
+            // the old socket must not call its callbacks once they are gone
+            old.set_onopen(None);
+            old.set_onmessage(None);
+            old.set_onclose(None);
+            let _ = old.close();
+        }
+        self.handlers = None;
         let Ok(ws) = WebSocket::new(&self.url) else {
             self.closed_at = Some(Instant::now());
             return;
@@ -44,7 +61,6 @@ impl WebLink {
         let inbox = self.inbox.clone();
         let onopen = Closure::<dyn FnMut()>::new(move || inbox.borrow_mut().push_back(Incoming::Open));
         ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
-        onopen.forget();
 
         // Lines may arrive split over messages, or several in one
         let inbox = self.inbox.clone();
@@ -62,13 +78,12 @@ impl WebLink {
             }
         });
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        onmessage.forget();
 
         let inbox = self.inbox.clone();
         let onclose = Closure::<dyn FnMut()>::new(move || inbox.borrow_mut().push_back(Incoming::Closed("connection closed".into())));
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-        onclose.forget();
         self.ws = Some(ws);
+        self.handlers = Some(Handlers { _open: onopen, _message: onmessage, _close: onclose });
     }
 
     fn send(&self, msg: &str) {
@@ -188,7 +203,7 @@ impl Overlay {
             let entry = showing.iter().find(|(f, _, _)| f == field);
             let place = entry.and_then(|(_, text, password)| {
                 let rect = core.hits.areas.iter().find(|(_, a)| *a == Action::Focus(*field)).map(|(r, _)| *r)?;
-                let (a, b) = (cell(rect.x, rect.y)?, cell(rect.x + rect.width - 1, rect.y)?);
+                let (a, b) = (cell(rect.x, rect.y)?, cell(rect.x + rect.width.saturating_sub(1), rect.y)?);
                 Some((text, *password, a, b))
             });
             let Some((text, password, a, b)) = place else {
@@ -284,6 +299,7 @@ pub fn main() {
     let link = Rc::new(RefCell::new(WebLink {
         url: ws_url(),
         ws: None,
+        handlers: None,
         inbox: Rc::new(RefCell::new(VecDeque::new())),
         closed_at: None,
         ever_open: false,

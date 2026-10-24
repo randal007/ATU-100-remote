@@ -209,6 +209,8 @@ static const int corr_add[] = {244, 254, 280, 297, 310, 430, 484, 530, 648, 743,
 
 int correction(int input) {
     char i;
+    if (e_c_b_D_correction != 1)
+        return input; // cell 0E: a linear detector, no correction
     if (input <= 80)
         return 0;
     for (i = 0; i < 12 && input > corr_upto[i]; i++)
@@ -281,7 +283,7 @@ void get_pwr() {
     //
     l_Forward = g_u_fwd = get_forward();
     l_Reverse = g_u_rev = get_reverse();
-    m_in(0, e_c_b_D_correction == 1 ? correction((int) (l_Forward * 3)) : l_Forward * 3);
+    m_in(0, correction((int) (l_Forward * 3)));
     m_in(1, e_c_K_Mult);
     m_in(2, e_c_b_P_High == 1 ? 50 : 5); // 0 - 1500 W, or 0 - 151.0 W
     m_calc(p_power);
@@ -305,17 +307,7 @@ void get_pwr() {
 void get_swr() {
     uint32_t timeout = 0;
 
-    get_pwr();
-    if (g_char_p_cnt != 100) {
-        g_char_p_cnt += 1;
-        if (g_i_PWR > g_i_P_max)
-            g_i_P_max = g_i_PWR;
-    } else {
-        g_char_p_cnt = 0;
-        show_pwr(g_i_P_max, g_i_SWR);
-        g_i_P_max = 0;
-    }
-    while ((g_i_PWR < e_i_watts_min_for_start) | (g_i_PWR > e_i_watts_max_for_start & e_i_watts_max_for_start > 0)) { // waiting for good power
+    for (;;) {
         CLRWDT();
         get_pwr();
         if (g_char_p_cnt != 100) {
@@ -327,21 +319,24 @@ void get_swr() {
             show_pwr(g_i_P_max, g_i_SWR);
             g_i_P_max = 0;
         }
-        //
+        // A Reset or Tune message stops the tune at any reading, not only
+        // while it waits for carrier (else it would act after the tune:
+        // a second tune, or the relays reset). Status and Raw are answered,
+        // other messages get Busy
+        if (serial_during_tune())
+            break;
+        if (!((g_i_PWR < e_i_watts_min_for_start) | (g_i_PWR > e_i_watts_max_for_start & e_i_watts_max_for_start > 0)))
+            return; // good power
+        // Waiting for carrier: give up after about a minute, or on the Tune button
         if (Button(&PORTB, TUNE_BUTTON, 5, BUTTON_RELEASED))
             g_b_rready = 1;
-
-        // Give up after about a minute, on the Tune button, or on a Reset
-        // or Tune message (other messages are answered while waiting)
-        if ((timeout++ > 7200) || serial_during_tune() || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
-            // show_reset() from here went 17 calls deep with the OLED, past
-            // the PIC's 16-level stack: the chip restarted
-            g_b_tune_given_up = 1;
-            g_i_SWR = 0;
-            return;
-        }
-    } //  good power
-    return;
+        if ((timeout++ > 7200) || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED)))
+            break;
+    }
+    // show_reset() from here went 17 calls deep with the OLED, past the
+    // PIC's 16-level stack: the chip restarted. tune_btn_push does it
+    g_b_tune_given_up = 1;
+    g_i_SWR = 0;
 }
 
 void set_ind(char Ind) {
@@ -621,9 +616,25 @@ static void m_add(char line, char code, int cr) {
     t_n[line]++;
 }
 
-/*  Set the relays, one settling wait when L and C change together, and
-    measure (again for a new best, keeping the average): g_i_SWR, and
-    |g|^2 in t_v[R_G2]. 0 when the tune was cancelled */
+// Set the relays that differ, one settling wait when L and C change together
+static void m_relays(char l, char c, char sw) {
+    int wait = e_i_ms_Rel_Del;
+    if (sw != g_c_SW)
+        set_sw(g_c_SW = sw);
+    if (l != g_c_ind && c != g_c_cap) {
+        e_i_ms_Rel_Del = 0;
+        set_ind(g_c_ind = l);
+        e_i_ms_Rel_Del = wait;
+    }
+    if (l != g_c_ind)
+        set_ind(g_c_ind = l);
+    if (c != g_c_cap)
+        set_cap(g_c_cap = c);
+}
+
+/*  Set the relays and measure (again for a new best, keeping the
+    average): g_i_SWR, and |g|^2 in t_v[R_G2]. 0 when the tune was
+    cancelled */
 static char m_measure(char l, char c, char sw, char again) {
     char i, key = c | sw << 7;
     int cr = 0, cf = 0, first, knee = 0;
@@ -634,18 +645,7 @@ static char m_measure(char l, char c, char sw, char again) {
             t_v[R_G2] = e->g2;
             return 1;
         }
-    if (sw != g_c_SW)
-        set_sw(g_c_SW = sw);
-    if (l != g_c_ind && c != g_c_cap) {
-        first = e_i_ms_Rel_Del;
-        e_i_ms_Rel_Del = 0;
-        set_ind(g_c_ind = l);
-        e_i_ms_Rel_Del = first;
-    }
-    if (l != g_c_ind)
-        set_ind(g_c_ind = l);
-    if (c != g_c_cap)
-        set_cap(g_c_cap = c);
+    m_relays(l, c, sw);
     for (;;) {
         get_swr();
         if (g_i_SWR == 0)
@@ -748,7 +748,7 @@ static char m_step(char v, char dv, char fixed) {
     if (fixed)
         return fixed;
     if (v == 0)
-        return 2;
+        return dv > 4 ? 1 : 2; // from 0: 2, then single relays as the patch shrinks
     v = (v + dv / 2) / dv;
     return v ? v : 1;
 }
@@ -839,6 +839,9 @@ static const char m_probe[] = {0, 4, 16, 64, 4, 16, 64};
 
 // A reading on a line: L alone (line 0) or C alone (1)
 static char m_line(char line, char code, char sw) {
+    char max = line ? t_c_max : t_l_max;
+    if (code > max)
+        code = max; // a board with 5 or 6 relays: the probe at 64 is not there
     return m_measure(line ? 0 : code, line ? code : 0, sw, 0);
 }
 
@@ -857,8 +860,11 @@ static char m_search(void) {
             if (!m_fit(line) || !m_calc(p_vertex))
                 continue;
             n = t_n[line];
+            // the codes first: a reading may show the power, whose maths uses t_out
             for (i = 0; i < 3; i++)
-                if (!m_line(line, m_nearest(t_out[i], line), sw))
+                t_cand[i].l = m_nearest(t_out[i], line);
+            for (i = 0; i < 3; i++)
+                if (!m_line(line, t_cand[i].l, sw))
                     return 0;
             if (t_n[line] != n)
                 added = 1;
@@ -896,10 +902,7 @@ static void tune_model(void) {
         g_i_SWR = 0;
         return;
     }
-    if (g_c_SW != t_top[T_BEST].sw)
-        set_sw(g_c_SW = t_top[T_BEST].sw);
-    set_ind(g_c_ind = t_top[T_BEST].l);
-    set_cap(g_c_cap = t_top[T_BEST].c);
+    m_relays(t_top[T_BEST].l, t_top[T_BEST].c, t_top[T_BEST].sw);
     g_i_SWR = t_best;
 }
 
