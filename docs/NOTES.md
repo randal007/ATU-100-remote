@@ -1,30 +1,68 @@
 # Project notes (VE7NHW)
 
-Status and decisions for this branch. The tuner lives inside a homemade
+Status and decisions for both branches. The tuner lives inside a homemade
 amplifier run by an Arduino Mega; the goal is one firmware with the display,
 all three buttons and a serial link to the Mega and/or an ESP32.
 README.md is the full manual; this file is the working notes.
 
-## Where things stand (2026-10-23) — resume here
+## Where things stand (2026-10-24) — resume here
 
-Everything is on branch `display-buttons-uart` (the fork's default branch)
-of randal007/ATU-100-remote, pushed. **All of it is tested in the
-simulators only: nothing has been flashed or used on the air.**
+Two branches of randal007/ATU-100-remote, both pushed, both with every
+fix from both code reviews. **Everything is tested in the simulators
+only: nothing has been flashed or used on the air.**
+
+| | `display-buttons-uart` | `tune-research` |
+|---|---|---|
+| Pull request | #1, into master (ukoda's, untouched) | #2, into display-buttons-uart |
+| Tuning search | N7DDC's and the log grid (cell 36 chooses) | **the model search** only (cell 36 unused) |
+| Firmware | 1.0.1: 15616 of 16384 words, 656 bytes RAM, stack 14 of 16 | 1.1.1: 16364 of 16384 words (**20 free**), 915 bytes RAM, stack 15 of 16 |
+| Sweep, tuner as built, 10 W | log grid 91%, N7DDC 52% below SWR 1.5 | 96% |
+| atutop, Python tools | have the search switch (`g`, `--search`) | no search switch |
+
+This file is on both branches; this copy is on `display-buttons-uart`; the work goes on in `tune-research` (`git checkout tune-research`).
+
+His decisions (2026-10-24): **`tune-research` goes forward**; **keep
+both branches** (he flashes each to compare the searches on the real
+tuner; never delete `display-buttons-uart`); what ends up in master is
+open. Shared fixes go on `display-buttons-uart` first, then
+`git merge display-buttons-uart` into `tune-research` (conflicts: main.h's
+search code, cell 36, the README's tuning text and figures, the hex).
+
+**The model search** (`tune-research`, main.h `tune_model`): measure 7
+settings (no relays, L alone, C alone), fit a weighted parabola along the
+L-only and C-only lines (s = (1+|g|²)/(1−|g|²) is exactly a parabola),
+measure at their bottoms, calculate the antenna (R, X, frequency) and the
+exact L-network match on both capacitor sides, refine with a 3x3 bowl fit,
+and a 7x7 grid + bowl when that ends above SWR 1.3. 96% below SWR 1.5 in
+1.5 s (log grid 91% / 3.7 s, N7DDC 52% / 1.4 s); times include the PIC's
+calculating (0.43 s), measured in gpsim. Floats run on a byte-code
+calculator (`m_calc`, programs `p_*` in main.h): a float op costs a PIC16
+20-40 words as plain C; get_pwr/show_pwr maths moved onto it too. **Code
+space is the constraint**: new firmware code on this branch must make room
+(see the trims in research/tuning/README.md). The study, every method
+tried and the tables: research/tuning/README.md. `research/tuning/firmware.py`
+is the search in Python (reads the programs from main.h; keep it in step
+with any change to the search), `research/tuning/cycles/run.sh` times the
+programs in gpsim (16F1788, same core; Arch's gpsim package unpacked
+anywhere works, `GPSIM=` points at it).
+
+Both branches:
 
 - **Tuner firmware** (PIC16F1938): display + 3 buttons + serial on RA6/RA7
-  (pins 9/10), JSON protocol, log grid tuning search (cell 36), HighSWR
-  (cell 37) and HighPower (from cell 31) alarms with the reading in the
-  event, Raw detector readings, live settings, Busy while a tune waits,
-  serial robustness (128 byte buffer, damaged messages dropped), ignores
-  `{"ESP32":...}`, RelayI/RelayC in the status, letters only alone on a
-  line. Revision `FW_REVISION` "1.0.1" in main.c, in the Startup `Build`
-  field. 15616 of 16384 words (95%), 656 bytes RAM, call stack 14 of 16
-  (build.sh checks it). Hex:
-  `ATU-100_display_uart_PIC16F1938_20261024.hex` (rebuild + copy with
-  every firmware change).
-- **Simulator**: `test/run.sh`, 40 checks per display type (37 LED) x 3
-  baud offsets, +-2.5% for one display, + the search sweep (log grid 91% vs
-  N7DDC 45% below SWR 1.5); `test/python_tools.sh` for the Python tools.
+  (pins 9/10), JSON protocol (one message per line; numbers 0-255, else
+  Error), HighSWR (cell 37) and HighPower (from cell 31) alarms with the
+  reading in the event, Raw detector readings, live settings, Reset/Tune
+  stop a tune at any reading (Status/Raw answered, the rest Busy), serial
+  robustness (128 byte buffer, damaged or overflowed messages dropped),
+  ignores `{"ESP32":...}`, RelayI/RelayC in the status, letters only
+  alone on a line. Revision `FW_REVISION` in main.c, in the Startup
+  `Build` field. Hex: `ATU-100_display_uart_PIC16F1938_<date>.hex` in the
+  repo root (rebuild + copy with every firmware change; build.sh checks
+  the call stack).
+- **Simulator**: `test/run.sh`: 43 checks per display type (40 LED) x 3
+  baud offsets, ±2.5% for one display, then the search sweep (REAL=0 ideal
+  relays, REAL=1 a tuner as built; FWD_MV=636 for 5 W; sweep CSVs with a
+  `readings` column); `test/python_tools.sh` for the Python tools.
 - **ESP32 bridge** (`esp32/atu100_bridge`, Seeed XIAO ESP32S3 **Plus**):
   USB + TCP 7000 bridge, UDP 7001 find, mDNS atu100.local, Mega port
   (JSON lines only), Wi-Fi settings over USB or from its hotspot,
@@ -33,37 +71,38 @@ simulators only: nothing has been flashed or used on the air.**
   /setup. Compiles (58% of 2 MB with the browser files). **Untested on
   hardware.** Simulator: `test/esp32_sim.py` (reference for the messages;
   web 8080 / WS 8081; ATU100_SIM_LAN=1 for phones).
+- **Mega sketch** (`arduino/atu100_bridge`): compiles for the Mega
+  (`arduino-cli compile -b arduino:avr:mega`, core installed 2026-10-24).
 - **atutop** (`tui/`, Rust): terminal (`native.rs`) and browser
   (`web.rs`, Ratzilla) share `app.rs` + `ui.rs` + `cells.rs`. Connect
   screen, network settings (o), ATU-100 settings (e: every EEPROM cell,
   measured L/C, defaults), winding dialog, HighPower scale, web indicator,
-  phone layout and keyboards, scroll bar. Installed at
-  `~/.local/bin/atutop`. `cargo test` checks the cell encodings.
+  phone layout and keyboards, scroll bar. Commands wait for their own
+  reply. Installed at `~/.local/bin/atutop` (build of `tune-research`).
+  `cargo test`: the cell encodings and the command pacing.
 - **Python tools** updated; ignore ESP32 lines.
 
 ### Next
 
 1. **First flash** (he is getting ready to test): back up the tuner's
    EEPROM and flash with the PICkit 3 (MPLAB IPE 6.20 or older, can be
-   installed for him), check display/buttons/serial with atutop, then
-   compare the two tuning searches on the real antennas (cell 36).
+   installed for him), check display/buttons/serial with atutop, then tune
+   on the real antennas, each branch's hex in turn. Advise tuning with
+   5-10 W (below ~2 W every search stops short: the reflected diode's knee).
 2. **ESP32 bridge on the board** when the parts arrive: `esp32/build.sh`,
    upload; check opening the native USB port does not reset it (DTR/RTS),
    Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
-   the Mega port.
-3. **Second ultra review** (2026-10-24): 32 findings + ~20 small on PR #1
-   (all fixed except: the display type's two copies, which cannot
-   disagree; the web-origin and hotspot-subnet checks, design questions
-   for a LAN box; the simulator's timing caveats), 7 on PR #2 (the model
-   search). Notable: Reset/Tune messages now stop a tune at any reading,
-   not only while it waits for carrier (else a second tune followed);
-   numbers out of 0-255 refused; atutop waits for each command's own reply.
-   **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
-   15 inline findings + 5 small, all real, all fixed except item 11
-   (serial sampling point: kept, margin +3.5/-2.5% covers the PIC's 2%;
-   explained to him). After the fixes: merge PR #1, make master the
-   default branch again, delete display-buttons-uart (he agreed in
-   principle; confirm).
+   the Mega port; and from the second review: a shared Wi-Fi scan, the
+   hotspot lingering 30 s after always-on is turned off, no background
+   retries after a failed join.
+3. **Code reviews** (ultra, cloud), all findings answered on the PRs:
+   - first, PR #1, 2026-10-23: 15 inline + 5 small, all fixed except
+     item 11 (serial sampling point: kept, margin +3.5/−2.5% covers the
+     PIC's 2%);
+   - second, 2026-10-24: 32 inline + ~20 small on PR #1, 7 on PR #2, all
+     fixed except: the display type's two copies (cannot disagree); the
+     web-origin and hotspot-subnet checks (design questions for a LAN
+     box); the simulator's timing caveats (notes).
 4. Ideas: a raw "any cell" hex editor in ATU-100 settings (offered, not
    asked for); band memories on the Mega/ESP32 (restore L, C and the LC/CL
    side); a hint in atutop that LC means a load above 50 ohm; report the
