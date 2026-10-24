@@ -164,6 +164,20 @@ impl Tuner {
                         self.ind_bits = bits;
                     }
                 }
+                // The relays themselves (this firmware's status): exact, where
+                // working them out from the totals fails with measured or
+                // linear values. Read after Capacitance and Inductance.
+                "RelayI" => {
+                    if let Some(n) = value.as_u64() {
+                        self.ind_bits = n as u8 & 0x7f;
+                    }
+                }
+                "RelayC" => {
+                    if let Some(n) = value.as_u64() {
+                        self.cap_bits = n as u8 & 0x7f;
+                        self.order_lc = n & 0x80 != 0;
+                    }
+                }
                 "Fwd" => self.fwd_mv = value.as_i64(),
                 "Rev" => self.rev_mv = value.as_i64(),
                 "Build" => self.build = value.as_str().map(String::from),

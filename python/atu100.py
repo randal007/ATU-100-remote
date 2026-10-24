@@ -95,6 +95,7 @@ class atu100(object):
         self.order       = 'LC'
         self.capacitance = 0
         self.inductance  = 0
+        self.tune_ended  = False    # Tuned (or Reset) seen since the last Tune
         self.relay_order = False
         self.relay_cap   = [False, False, False, False, False, False, False]
         self.relay_ind   = [False, False, False, False, False, False, False]
@@ -367,6 +368,11 @@ class atu100(object):
                 bits = self._relays_for(value, self.value_ind)
                 if bits:
                     self.relay_ind = bits
+            elif name == 'RelayI':  # the relays themselves (this firmware), exact
+                self.relay_ind = [bool(value >> i & 1) for i in range(7)]
+            elif name == 'RelayC':
+                self.relay_cap = [bool(value >> i & 1) for i in range(7)]
+                self.relay_order = bool(value & 0x80)
             elif name == 'Fwd':
                 self.fwd_mv = value
             elif name == 'Rev':
@@ -377,7 +383,9 @@ class atu100(object):
                 self.event = value
                 if value == 'Tune':
                     self.tuning = True
+                    self.tune_ended = False
                 elif value in ('Tuned', 'Reset', 'Startup', 'Restart'):
+                    self.tune_ended = True
                     self.tuning = False
                 elif value == 'HighSWR':
                     self.high_swr = True
@@ -698,8 +706,8 @@ class atu100(object):
 
                 else:
                     result = 'Power' in rxmsg
-                    if self.args.command == 't' and self.tuning:
-                        result = False  # a status from before the tune finished
+                    if self.args.command == 't' and not self.tune_ended:
+                        result = False  # a status from before the tune ended
                     self._print_msg(rxmsg)
                     if result:
                         break

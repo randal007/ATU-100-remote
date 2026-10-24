@@ -27,8 +27,10 @@
     Lines are passed whole: messages from different sides never mix.
 
     Wiring (XIAO pin names):
-      D7 (GPIO44) RX  <- tuner RA7, PIC pin 9, through 2.2k / 3.3k (5 V -> 3.3 V)
-      D6 (GPIO43) TX  -> tuner RA6, PIC pin 10 (10k pull-up there to 3.3 V)
+      D5 (GPIO6)  RX  <- tuner RA7, PIC pin 9, through 2.2k / 3.3k (5 V -> 3.3 V)
+      D4 (GPIO5)  TX  -> tuner RA6, PIC pin 10 (10k pull-up there to 3.3 V)
+      Not D6/D7 (GPIO43/44): the ESP32-S3 prints its boot text there at
+      115200 baud on every reset, which the tuner would read as garbage.
       D8 (GPIO7)  RX  <- Mega TX1 (pin 18), through 2.2k / 3.3k
       D9 (GPIO8)  TX  -> Mega RX1 (pin 19)
       5V <- a 7805 from the tuner's 12 V; GND to the tuner's and the Mega's
@@ -41,6 +43,7 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
 #include <WiFiUdp.h>
+#include <driver/gpio.h>
 #if __has_include("web_files.h") // made by esp32/make_web_files.py (esp32/build.sh)
 #include "web_files.h"
 #else
@@ -63,12 +66,13 @@ const IPAddress HOTSPOT_IP(192, 168, 73, 1);
 #define WS_PORT 81
 #define MAX_WS 4
 #define TUNER_BAUD 4800
-#define TUNER_RX 44
-#define TUNER_TX 43
+#define TUNER_RX 6 // D5
+#define TUNER_TX 5 // D4
 #define MEGA_RX 7
 #define MEGA_TX 8
 #define MAX_TCP 2
-#define LINE_MAX 300
+#define LINE_MAX 300      // from clients: commands are short
+#define TUNER_LINE_MAX 3000 // from the tuner: the EEPROM dump is one line of ~2,560
 #define JOIN_TIMEOUT 20000  // ms to join a network before the hotspot comes up
 #define RETRY_EVERY 30000   // then try the network again this often
 #define HOTSPOT_LINGER 30000 // keep the hotspot this long after joining
@@ -84,8 +88,8 @@ Preferences prefs;
 
 enum Who { USB, MEGA, TCP0, WS0 = TCP0 + MAX_TCP }; // TCP0 + i, WS0 + n for the network clients
 
-struct LineBuf {
-  char buf[LINE_MAX];
+template <size_t LINE> struct LineBuf {
+  char buf[LINE];
   size_t n = 0;
   bool overflow = false;
   // Add a character; true when a whole line is ready in buf
@@ -100,7 +104,7 @@ struct LineBuf {
       overflow = false;
       return ready;
     }
-    if (n < LINE_MAX - 1)
+    if (n < LINE - 1)
       buf[n++] = c;
     else
       overflow = true; // too long: dropped whole
@@ -108,7 +112,8 @@ struct LineBuf {
   }
 };
 
-LineBuf usbLine, megaLine, tunerLine, tcpLine[MAX_TCP], wsLine[MAX_WS];
+LineBuf<LINE_MAX> usbLine, megaLine, tcpLine[MAX_TCP], wsLine[MAX_WS];
+LineBuf<TUNER_LINE_MAX> tunerLine;
 
 // Wi-Fi
 enum WifiState { W_OFF, W_CONNECTING, W_CONNECTED, W_FAILED };
@@ -435,7 +440,7 @@ void fromTuner(const char *line) {
   for (int n = 0; n < MAX_WS; n++)
     if (wsServer.clientIsConnected(n))
       sendTo(WS0 + n, line);
-  if (strstr(line, "\"SWR\""))
+  if (strstr(line, "\"Bypass\"")) // a status line (a HighSWR event has "SWR" too)
     lastStatus = line;
   if (strstr(line, "\"Event\"")) {
     events[eventsIn++ % 8] = line;
@@ -618,12 +623,19 @@ void webSetup() {
 // ------------------------------------------------------------ setup / loop
 
 void setup() {
+  // Send buffers big enough for the EEPROM dump line: without them USB
+  // would cut it short, and the Mega at 4800 baud would hold the bridge up
+  // for 5 s while it went out
+  Serial.setTxBufferSize(4096);
   Serial.begin(115200);    // USB: the speed does not matter
   Serial.setTxTimeoutMs(0); // never wait for a computer that is not there
+  mega.setTxBufferSize(4096);
   tuner.begin(TUNER_BAUD, SERIAL_8N1, TUNER_RX, TUNER_TX);
   mega.begin(TUNER_BAUD, SERIAL_8N1, MEGA_RX, MEGA_TX);
-  pinMode(TUNER_RX, INPUT_PULLUP); // quiet when nothing is connected
-  pinMode(MEGA_RX, INPUT_PULLUP);
+  // Pull-ups on the inputs, quiet when nothing is connected. Not pinMode():
+  // in arduino-esp32 3.x that takes the pin away from the UART
+  gpio_pullup_en((gpio_num_t)TUNER_RX);
+  gpio_pullup_en((gpio_num_t)MEGA_RX);
 
   loadSettings();
   WiFi.persistent(false); // our settings live in Preferences

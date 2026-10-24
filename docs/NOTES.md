@@ -16,13 +16,15 @@ simulators only: nothing has been flashed or used on the air.**
   (cell 37) and HighPower (from cell 31) alarms with the reading in the
   event, Raw detector readings, live settings, Busy while a tune waits,
   serial robustness (128 byte buffer, damaged messages dropped), ignores
-  `{"ESP32":...}`. Revision `FW_REVISION` "1.0" in main.c, in the Startup
-  `Build` field. 15376 of 16384 words (94%), 662 bytes RAM. Hex:
+  `{"ESP32":...}`, RelayI/RelayC in the status, letters only alone on a
+  line. Revision `FW_REVISION` "1.0" in main.c, in the Startup `Build`
+  field. 15535 of 16384 words (95%), 662 bytes RAM, call stack 14 of 16
+  (build.sh checks it). Hex:
   `ATU-100_display_uart_PIC16F1938_20261023.hex` (rebuild + copy with
   every firmware change).
-- **Simulator**: `test/run.sh`, 37 checks per display type (34 LED) x 3
-  baud offsets + the search sweep (log grid 91% vs N7DDC 46% below SWR
-  1.5); `test/python_tools.sh` for the Python tools.
+- **Simulator**: `test/run.sh`, 40 checks per display type (37 LED) x 3
+  baud offsets, +-2.5% for one display, + the search sweep (log grid 91% vs
+  N7DDC 45% below SWR 1.5); `test/python_tools.sh` for the Python tools.
 - **ESP32 bridge** (`esp32/atu100_bridge`, Seeed XIAO ESP32S3 **Plus**):
   USB + TCP 7000 bridge, UDP 7001 find, mDNS atu100.local, Mega port
   (JSON lines only), Wi-Fi settings over USB or from its hotspot,
@@ -49,8 +51,12 @@ simulators only: nothing has been flashed or used on the air.**
    upload; check opening the native USB port does not reset it (DTR/RTS),
    Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
    the Mega port.
-3. He planned an **ultra code review** (`/code-review ultra`, cloud) of the
-   branch before testing on hardware.
+3. **Code review done** (ultra, cloud, on PR #1 into master, 2026-10-23):
+   15 inline findings + 5 small, all real, all fixed except item 11
+   (serial sampling point: kept, margin +3.5/-2.5% covers the PIC's 2%;
+   explained to him). After the fixes: merge PR #1, make master the
+   default branch again, delete display-buttons-uart (he agreed in
+   principle; confirm).
 4. Ideas: a raw "any cell" hex editor in ATU-100 settings (offered, not
    asked for); band memories on the Mega/ESP32 (restore L, C and the LC/CL
    side); a hint in atutop that LC means a load above 50 ohm; report the
@@ -104,9 +110,12 @@ hamradio.
   noise near the detector; not "7805 replacement" switchers like Recom
   R-78), ~1 W, heatsink or chassis, ferrite + 10 uF on the 12 V tap,
   output to the XIAO's 5 V pin. Not the tuner's 78L05 (100 mA).
-- Wiring (README table): D7 RX <- RA7 through 2.2k/3.3k; D6 TX -> RA6
-  (10k pull-up to 3.3 V); D8 RX <- Mega TX1 through a divider; D9 TX ->
-  Mega RX1.
+- Wiring (README table): D5 (GPIO6) RX <- RA7 through 2.2k/3.3k; D4
+  (GPIO5) TX -> RA6 (10k pull-up to 3.3 V); D8 RX <- Mega TX1 through a
+  divider; D9 TX -> Mega RX1. Not D6/D7 (GPIO43/44): UART0, the S3's boot
+  text goes out there (review item 5). Pull-ups with gpio_pullup_en, not
+  pinMode (core 3.x detaches the UART). Tuner lines up to 3000 chars (the
+  dump is ~2560), 4 KB TX buffers on USB and the Mega port.
 - His decisions: Wi-Fi settings change over USB or from the hotspot only;
   hotspot fallback for off-grid use; password `hamradio`, address
   192.168.73.1; always-on option; no captive portal and no custom hotspot

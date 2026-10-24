@@ -178,16 +178,18 @@ the display-off timer (cell 32).
   before sending the next command is still the safe way.
 - Straight after power up the first measurement takes about half a second;
   a status asked for before then shows no power.
-- Single characters outside `{}` work like the buttons, for typing in a
-  terminal: `t` tune, `r` reset, `b` bypass on/off, `a` auto on/off,
-  `s` status.
+- A single letter **alone on a line** works like the buttons, for typing in
+  a terminal (the letter, then Enter): `t` tune, `r` reset, `b` bypass
+  on/off, `a` auto on/off, `s` status. Letters sharing a line with anything
+  else are ignored, so the remains of a message that lost its `{` never
+  act as button presses.
 
 ### From the tuner
 
 **Status**, whenever something changes, and in answer to `{"Status": true}`:
 
 ```
-{"Auto":false,"Bypass":false,"Power":10.0,"Antenna":7.2,"Efficiency":72,"SWR":1.21,"Order":"CL","Capacitance":320,"Inductance":0}
+{"Auto":false,"Bypass":false,"Power":10.0,"Antenna":7.2,"Efficiency":72,"SWR":1.21,"Order":"CL","Capacitance":320,"Inductance":0,"RelayI":0,"RelayC":24}
 ```
 
 | Field | Meaning |
@@ -199,6 +201,7 @@ the display-off timer (cell 32).
 | `SWR` | two decimals; 0.00 under 1 W (N7DDC's firmware does not measure the SWR below 1 W). Measured again straight after relays change, so a status after `RelayI`, `RelayC` or bypass carries the new SWR |
 | `Order` | `LC`: capacitors on the antenna side; `CL`: on the transmitter side |
 | `Capacitance`, `Inductance` | of the relays that are on, pF and nH |
+| `RelayI`, `RelayC` | the relays themselves, as `RelayI`/`RelayC` take them: bit 0 the smallest, and 128 in `RelayC` for LC. Exact where the totals are not (measured or linear values) |
 
 **Events**: `{"Event":"Tune"}`
 
@@ -209,8 +212,8 @@ the display-off timer (cell 32).
 | `Tune` | a tune starts: transmit a carrier now. This replaces N7DDC's Tx_req signal. Any waiting status goes out first, so after an auto tune starts the high SWR that started it has already been reported |
 | `Tuned` | the tune has finished: stop the carrier. A status line follows |
 | `Reset` | the relays were reset (button, command, or a tune given up) |
-| `HighSWR` | SWR at or above the limit in cell 37 with power present, with the reading: `{"Event":"HighSWR","SWR":2.76}`; sent within a few ms, again only after the SWR has dropped 0.1 below the limit or the power has gone. Not checked while tuning |
-| `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). With the reading: `{"Event":"HighPower","Power":120.4}`. Sent again only after the power has dropped 10% |
+| `HighSWR` | SWR at or above the limit in cell 37 with power present, with the reading: `{"Event":"HighSWR","SWR":2.76}`; sent within a few ms, again only after the SWR has stayed 0.1 below the limit, or the power off, for about 2 seconds (so not once per CW dit). Not checked while tuning |
+| `HighPower` | more power than the tuner is set up for: above 100 W (the board's rating) with the stock 1:10 tandem match, 1.4 W × ratio² with a smaller one (35 W at 1:5); off in high power mode (cell 30). With the reading: `{"Event":"HighPower","Power":120.4}`. Sent again only after the power has stayed 10% below the limit, or off, for about 2 seconds |
 | `Overload` | more power than the detector can measure |
 | `Error` | a command the tuner did not understand |
 | `Busy` | a command that arrived while a tune was waiting for carrier, and was not done |
@@ -234,7 +237,7 @@ and values.
 | `{"RelayI": n}` | inductor relays as a bit set, 0 to 127; bit 0 is the smallest |
 | `{"RelayC": n}` | capacitor relays, 0 to 127, plus 128 for the capacitors on the antenna side (LC) |
 | `{"Get": cell}` | read an EEPROM cell, address in decimal |
-| `{"Set": cell, "Value": n}` | write a cell, both in decimal. Takes effect at once; display settings restart the display |
+| `{"Set": cell, "Value": n}` | write a cell, both in decimal, in one message, Set first (a Value without its own Set is refused with `Error`). Takes effect at once; display settings restart the display |
 | `{"Dump": "EEPROM"}` | all 256 cells (about 6 seconds at 4800 baud) |
 | `{"x": true}` | restart the tuner |
 | `{"ESP32": ...}` | ignored: meant for an [ESP32 bridge](#esp32-bridge), which answers it itself. atutop asks every link once, so the tuner stays quiet when there is no bridge |
@@ -306,10 +309,10 @@ relays can match below SWR 1.5, with 1% detector noise:
 
 | | N7DDC original | Log grid search |
 |---|---|---|
-| Tuned below SWR 1.5 | 46% | 91% |
-| Of loads starting below SWR 10 | 65% | 98% |
+| Tuned below SWR 1.5 | 45% | 91% |
+| Of loads starting below SWR 10 | 64% | 98% |
 | Left at SWR 2 or worse | 44% | 5.5% |
-| Typical tune time | about 1 s | about 3 s |
+| Typical tune time | about 1.5 s | about 4.5 s |
 
 The simulator's antenna and detector are idealised, so these numbers need
 confirming on the air. Compare the two on your own antennas by switching
@@ -620,11 +623,15 @@ It sits between the tuner and everything else:
 
 | XIAO pin | To | Note |
 |---|---|---|
-| D7 (GPIO44), RX | tuner RA7, PIC pin 9 | through a 2.2 kΩ / 3.3 kΩ divider: the tuner sends 5 V |
-| D6 (GPIO43), TX | tuner RA6, PIC pin 10 | 10 kΩ pull-up to 3.3 V at the PIC |
+| D5 (GPIO6), RX | tuner RA7, PIC pin 9 | through a 2.2 kΩ / 3.3 kΩ divider: the tuner sends 5 V |
+| D4 (GPIO5), TX | tuner RA6, PIC pin 10 | 10 kΩ pull-up to 3.3 V at the PIC |
 | D8 (GPIO7), RX | Mega TX1, pin 18 | through a 2.2 kΩ / 3.3 kΩ divider |
 | D9 (GPIO8), TX | Mega RX1, pin 19 | |
 | 5V, GND | a 7805 from the tuner's 12 V; common ground | not the tuner's 78L05 |
+
+Not D6/D7 for the tuner: they are the ESP32-S3's console pins, where it
+prints its start-up text at 115200 baud on every reset, which the tuner
+would read as garbage.
 
 Build: `esp32/build.sh`, which builds atutop for the browser, packs it
 into `web_files.h` (`esp32/make_web_files.py`) and compiles the firmware
@@ -641,8 +648,15 @@ with Microchip's free **XC8** compiler (v3.10 here, free mode, -O2) and the
 **PIC12-16F1xxx device pack**; their paths are at the top of the script.
 The MPLAB X project in the same folder also works.
 
-The firmware uses 15376 of 16384 program words (94%) and 662 of 1024
+The firmware uses 15535 of 16384 program words (95%) and 662 of 1024
 bytes of RAM.
+
+The PIC has a 16-level hardware call stack and restarts when it overflows,
+which no PC simulator can show. `build.sh` reads XC8's estimate of the
+deepest call chain from the listing, prints it (now 14 of 16, with the
+serial interrupt) and fails the build above 16. Tunes asked for by the
+button or over serial therefore start from the main loop, not from inside
+the button or serial code.
 
 atutop: [see above](#atutop) (`cd tui && cargo build --release`; the
 browser version with `trunk build --release`). The ESP32 bridge:
@@ -654,15 +668,21 @@ In `ATU_100_EXT_board/FirmWare_PIC16F1938/test`:
 
 - `./run.sh` compiles the firmware for the PC with a stand-in for the PIC's
   registers and runs it against a simulated Arduino on the serial line
-  (exact clock and 2% off either way), the buttons, an RF source and an
-  antenna behind the relay network. It makes 37 checks for each of three
-  display types (34 with the LED, which has no text to check): tuning by
-  serial and button, reset, bypass, auto, relays, messages while a tune
-  waits for carrier, the EEPROM dump with a command arriving during it,
-  power fields, detector readings, the HighSWR and HighPower alarms, an
-  auto tune reporting the high SWR before it starts, live settings, the
+  (exact clock and 2% off either way, and 2.5% for one display), the
+  buttons, an RF source and an antenna behind the relay network. It makes
+  40 checks for each of three display types (37 with the LED, which has no
+  text to check): tuning by serial and button, reset, bypass, auto, relays
+  and the relay fields, messages while a tune waits for carrier, the EEPROM
+  dump with a command arriving during it, power fields, detector readings,
+  the HighSWR and HighPower alarms (one alarm, not one per CW dit), an auto
+  tune reporting the high SWR before it starts, the remains of a damaged
+  message ignored, a Value without its Set refused, live settings, the
   watchdog and serial framing. Then it compares the two tuning searches
   over about 1100 antenna loads.
+- Serial margin: the PIC samples each bit 2 to 3 ticks of its 4× clock
+  after the edge, so it copes with the other side's clock from 2.5% fast
+  to 3.5% slow. The PIC's own clock is within 2%; the Mega and the ESP32
+  run from crystals.
 - `./python_tools.sh` runs the simulated tuner on a pseudo terminal in real
   time and drives the Python tools against it, including a settings backup
   and restore.

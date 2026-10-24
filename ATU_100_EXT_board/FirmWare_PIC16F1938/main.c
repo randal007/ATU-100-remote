@@ -660,7 +660,8 @@ void serial_proc(void)
             send_raw();
          else if (strcmp(json_rx_name, "Status") != 0)
             send_error();
-         new_state = true;
+         if (strcmp(json_rx_name, "Tune") != 0)
+            new_state = true; // a tune sends its status after Tuned
          if (strcmp(json_rx_name, "Status") != 0 && strcmp(json_rx_name, "Raw") != 0)
             wake(); // like a button press
          break;

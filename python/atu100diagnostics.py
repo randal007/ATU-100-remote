@@ -1030,7 +1030,7 @@ class atu100diag(object):
                 if 'Board' in rxmsg:
                     logging.info('Received info message')
 
-                elif 'Power' in rxmsg:
+                elif 'Power' in rxmsg and 'Event' not in rxmsg:  # not the HighPower event
                     logging.info('Received status message')
                     self.process_status_msg(rxmsg)
 

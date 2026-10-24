@@ -862,9 +862,9 @@ fn draw_settings(f: &mut Frame, body: Rect, app: &App, hits: &mut Hits) {
         }
         let focused = set.field == field;
         buf.set_line(inner.x, y, &Line::from(label(name, lw)), inner.width);
-        let shown: String = text.chars().rev().take(field_w as usize - 1).collect::<Vec<_>>().into_iter().rev().collect();
+        let shown: String = text.chars().rev().take((field_w as usize).saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
         let bg = if focused { DIV } else { FIELD_BG };
-        buf.set_string(x0, y, format!(" {shown:<w$}", w = field_w as usize - 1), Style::new().fg(TITLE).bg(bg));
+        buf.set_string(x0, y, format!(" {shown:<w$}", w = (field_w as usize).saturating_sub(1)), Style::new().fg(TITLE).bg(bg));
         if focused {
             let cx = x0 + 1 + shown.chars().count() as u16;
             buf.set_string(cx, y, "▏", Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));

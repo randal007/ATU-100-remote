@@ -392,14 +392,14 @@ class atu100remote(object):
                 if not self.raw_on:
                     self.update_var('Detector', '---/---', C_EMPTY_DATA)
 
+            elif key != -1:                    # Not 'no key' - Show key usage
+                 logging.warning(f'Unknown key: {key}')
+
             # Detector voltages once a second while 'v' is on
 
             if self.raw_on and time() - self.raw_last >= RAW_POLL and not self.atu.tuning:
                 self.raw_last = time()
                 self.atu.request_raw()
-
-            elif key != -1:                    # Not 'no key' - Show key usage
-                 logging.warning(f'Unknown key: {key}')
 
             # Check for a new JSON message
 

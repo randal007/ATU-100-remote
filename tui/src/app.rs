@@ -228,12 +228,11 @@ impl Outbox {
             return;
         }
         self.sent_at = None;
-        let next_ok = self
-            .queue
-            .front()
-            .is_some_and(|m| !tuning || ["Reset", "Status", "Raw", "ESP32"].iter().any(|k| m.contains(k)));
-        if next_ok {
-            let msg = self.queue.pop_front().unwrap();
+        // While tuning, the first command allowed then, wherever it is in
+        // the queue: a Bypass waiting at the front must not hold back a Reset
+        let allowed = |m: &String| !tuning || ["Reset", "Status", "Raw", "ESP32"].iter().any(|k| m.contains(k));
+        if let Some(i) = self.queue.iter().position(allowed) {
+            let msg = self.queue.remove(i).unwrap();
             send(&msg);
             self.sent_at = Some(Instant::now());
             self.recent.push_back((Instant::now(), msg));
@@ -292,6 +291,8 @@ impl Core {
         }
         self.app.port = port.to_string();
         self.app.link_error = None;
+        // a Tuned may have been lost with the link: the status will tell
+        self.t.tuning = false;
         self.app.esp.forget_link();
         self.out.queue.retain(|m| m.contains("Dump"));
         self.out.queue.push_front(r#"{"Status": true}"#.into());

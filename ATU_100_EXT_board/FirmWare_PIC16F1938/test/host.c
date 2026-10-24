@@ -238,8 +238,19 @@ static void received(char c)
     static double line_start;
     if (pty >= 0) {
         if (write(pty, &c, 1) < 0) { /* nobody reading */ }
-        if (getenv("QUIET"))
+        if (getenv("QUIET")) {
+            // quiet: only the events, so a test can still look for Error
+            static char line[300];
+            static int n;
+            if (c == '\n') {
+                line[n] = 0;
+                if (strstr(line, "\"Event\""))
+                    printf("  %7.2f  PIC> %s\n", secs(), line);
+                n = 0;
+            } else if (n < (int)sizeof line - 1)
+                line[n++] = c;
             return;
+        }
     }
     if (from_pic_len < (int)sizeof from_pic - 1) {
         if (from_pic_len == 0 || from_pic[from_pic_len - 1] == '\n')

@@ -50,6 +50,8 @@ import tty
 
 VERSION = 'sim'
 PORT = 7000
+LINE_MAX = 300         # as the real bridge: longer lines from a client are dropped
+TUNER_LINE_MAX = 3000  # and from the tuner (the EEPROM dump is ~2,560)
 FIND_PORT = 7001
 WEB_PORT = 8080  # the real bridge uses 80 and 81; below 1024 needs root here
 LAN = os.environ.get('ATU100_SIM_LAN') == '1'
@@ -388,7 +390,7 @@ class Bridge:
         while b'\n' in client.buf:
             line, client.buf = client.buf.split(b'\n', 1)
             text = line.strip()
-            if not text:
+            if not text or len(line) >= LINE_MAX:
                 continue
             try:
                 msg = json.loads(text)
@@ -403,7 +405,9 @@ class Bridge:
         self.tuner_buf += data
         while b'\n' in self.tuner_buf:
             line, self.tuner_buf = self.tuner_buf.split(b'\n', 1)
-            if b'"SWR"' in line:
+            if len(line) >= TUNER_LINE_MAX:
+                continue  # dropped, as the real bridge drops it
+            if b'"Bypass"' in line:
                 self.last_status = line.decode(errors='replace')
             for c in [self.usb] + self.wifi_clients + self.ws_clients:
                 c.send(line + b'\n')

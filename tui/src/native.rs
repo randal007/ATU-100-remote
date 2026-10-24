@@ -35,6 +35,9 @@ struct Shell {
     web_check: Option<std::sync::mpsc::Receiver<Option<String>>>,
     last_retry: Instant,
     last_web: Instant,
+    /// A port being opened in the background (a TCP connect can take
+    /// seconds): the port, whether it is a new one, the result to come
+    opening: Option<(String, bool, std::sync::mpsc::Receiver<Result<Link, String>>)>,
 }
 
 /// Try the web page's addresses from here, in the background; the first
@@ -71,6 +74,7 @@ pub fn main() {
         web_check: None,
         last_retry: Instant::now(),
         last_web: Instant::now() - Duration::from_secs(60),
+        opening: None,
     };
     match port {
         Some(port) => match Link::open(&port) {
@@ -220,6 +224,14 @@ fn effect_do(e: Effect, core: &mut Core, shell: &mut Shell) {
 /// Moving to another port (USB to Wi-Fi, the connect screen, the
 /// simulator), or trying again after the link was lost
 fn reopen(core: &mut Core, shell: &mut Shell) {
+    if let Some((port, moving, rx)) = shell.opening.take() {
+        match rx.try_recv() {
+            Ok(result) => opened(core, shell, port, moving, result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => shell.opening = Some((port, moving, rx)),
+            Err(_) => opened(core, shell, port, moving, Err("could not open".into())),
+        }
+        return;
+    }
     let retry = core.app.link_error.is_some() && !core.app.port.is_empty() && shell.last_retry.elapsed() >= Duration::from_secs(2);
     let Some(mut port) = shell.switch_to.take().or_else(|| retry.then(|| core.app.port.clone())) else { return };
     shell.last_retry = Instant::now();
@@ -245,10 +257,22 @@ fn reopen(core: &mut Core, shell: &mut Shell) {
         }
     }
     let moving = shell.link.is_none() || port != core.app.port;
-    if moving {
-        shell.link = None; // let go of the old port first: it may be the same device
-    }
-    match Link::open(&port) {
+    // Let go of the old link first, also when trying the same port again:
+    // its serial handle is exclusive, and a replugged board would otherwise
+    // come back under another name
+    shell.link = None;
+    // Open in the background: the screen keeps answering while it connects
+    let (tx, rx) = std::sync::mpsc::channel();
+    let p = port.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(Link::open(&p));
+    });
+    shell.opening = Some((port, moving, rx));
+}
+
+fn opened(core: &mut Core, shell: &mut Shell, port: String, moving: bool, result: Result<Link, String>) {
+    shell.last_retry = Instant::now();
+    match result {
         Ok(new) => {
             shell.link = Some(new);
             core.t.log(if moving { format!("Connected to {port}") } else { "Link back".into() }, Kind::Good);
