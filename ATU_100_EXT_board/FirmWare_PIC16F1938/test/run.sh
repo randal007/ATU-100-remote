@@ -17,6 +17,11 @@ for display in 5 1 0; do
         grep -E "PASSED|FAILED" "log_d${display}_e${err}.txt" | sed "s/^ */display $display, baud $err%: /"
     done
 done
+# The serial margin: the PIC's own clock is within 2%; 2.5% either way still works
+for err in 2.5 -2.5; do
+    DISPLAY_TYPE=5 BAUD_ERR=$err ./host_test > "log_d5_e${err}.txt" || status=1
+    grep -E "PASSED|FAILED" "log_d5_e${err}.txt" | sed "s/^ */display 5, baud $err%: /"
+done
 # Tuning searches over ~1000 loads on 160-10 m with 1% detector noise
 for mode in 0 1; do
     [ $mode = 0 ] && name="N7DDC original" || name="log grid search"

@@ -595,6 +595,7 @@ static void scenario(void)
     case 9:
         if (got("\"Capacitance\":10,\"Inductance\":160")) {
             check(relays_l() == 3 && relays_c() == 1 && LATC_r.LATC0 == 1, "relays follow RelayI/RelayC");
+            check(got("\"RelayI\":3,\"RelayC\":129"), "status reports the relays themselves");
             check(got("\"Order\":\"LC\""), "bit 7 of RelayC puts C on the output side");
             host_show_display("relays set by serial");
             next();
@@ -746,7 +747,51 @@ static void scenario(void)
             timeout(60, "auto tune");
         break;
 
-    case 19:
+    case 19: // a message that lost its '{': its letters must not press buttons
+        if (waited(1)) {
+            next();
+            send("\"Bypass\": true, \"Tune\": true}\n");
+        }
+        break;
+
+    case 20:
+        if (waited(2)) {
+            check(!got("\"Bypass\":true") && !got("\"Event\":\"Tune\"") && !got("\"Event\":\"Reset\""),
+                  "letters left from a damaged message are ignored");
+            next();
+            send("{\"Se\": 1, \"Value\": 0}\n"); // Set's name damaged
+        }
+        break;
+
+    case 21:
+        if (got("\"Event\":\"Error\"") && waited(1)) {
+            check(eeprom[1] == display_type, "a Value without its own Set writes nothing");
+            next();
+            send("{\"Auto\": false}\n");
+            send("{\"Reset\": true}\n"); // relays out: SWR above the 2.0 alarm
+        } else
+            timeout(3, "Error for a damaged Set");
+        break;
+
+    case 22: // key the carrier on and off like CW for 3 s above the alarm limit
+        if (waited(1) && step_time > 0)
+            step_time = -secs(); // counting from the Reset (next() set the mark)
+        if (step_time < 0) {
+            double t = secs() + step_time;
+            fwd_mv = ((int)(t * 1000 / 60) % 2) ? 900 : 0;
+            if (t > 3) {
+                int n = 0;
+                for (const char *p = from_pic + mark; (p = strstr(p, "\"Event\":\"HighSWR\"")) != NULL; p++)
+                    n++;
+                snprintf(what, sizeof what, "keying above the limit sends one HighSWR, not one per dit (%d)", n);
+                check(n == 1, what);
+                fwd_mv = 900;
+                next();
+            }
+        }
+        break;
+
+    case 23:
         if (waited(1))
             finish();
         break;

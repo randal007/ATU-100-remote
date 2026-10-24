@@ -13,6 +13,9 @@ static char g_c_step_cap = 0, g_c_step_ind = 0;
 static char g_c_L_mult = 1, g_c_C_mult = 1;
 int g_i_SWR, g_i_PWR, g_i_P_max, g_i_swr_a;
 static char g_b_rready = 0, g_char_p_cnt = 0;
+// A tune given up while waiting for carrier: reset once the search has
+// returned (tune_btn_push), not down here, where the call stack is deep
+static char g_b_tune_given_up = 0;
 
 static char g_b_Overload = 0;
 
@@ -245,7 +248,9 @@ void get_swr() {
         // Give up after about a minute, on the Tune button, or on a Reset
         // or Tune message (other messages are answered while waiting)
         if ((timeout++ > 7200) || serial_during_tune() || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
-            show_reset();
+            // show_reset() from here went 17 calls deep with the OLED, past
+            // the PIC's 16-level stack: the chip restarted
+            g_b_tune_given_up = 1;
             g_i_SWR = 0;
             return;
         }
@@ -697,12 +702,13 @@ void tune() {
         sharp_ind();
     }
     if (g_i_SWR < 120)
-        return;
+        goto restore; // not return: g_c_L_mult must go back (N7DDC returned here)
     if (e_c_num_C_q > 5) {
         g_c_step_cap = g_c_C_mult; // = g_c_C_mult
         g_c_C_mult = 1;
         sharp_cap();
     }
+restore:
     if (e_c_num_L_q == 5)
         g_c_L_mult = 1;
     else if (e_c_num_L_q == 6)

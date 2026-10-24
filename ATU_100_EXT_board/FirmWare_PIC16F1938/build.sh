@@ -15,6 +15,17 @@ mkdir -p "$OUT"
     -msummary=-psect,-class,+mem,-hex,-file -ginhx32 -Wl,--data-init \
     -mno-keep-startup -mno-osccal -mno-resetbits -mno-save-resetbits \
     -mno-download -mno-stackcall -mdefault-config-bits -std=c99 \
-    -mstack=compiled:auto:auto "$@" \
+    -mstack=compiled:auto:auto -Wa,-a "$@" \
     -o "$OUT/atu100.hex" \
     main.c pic_init.c cross_compiler.c oled_control.c uart.c json.c
+
+# The PIC16F1938 has a 16-level hardware stack and resets when it overflows
+# (STVREN on). XC8 estimates the deepest call chain in the listing; the
+# interrupt's figure includes the main program's. A PC simulator cannot see
+# this, so the build stops here instead.
+DEPTH=$(grep "Estimated maximum stack depth" "$OUT/atu100.lst" | awk '{print $5}' | sort -n | tail -1)
+echo "    Call stack depth     $DEPTH of 16 (with the interrupt)"
+if [ -z "$DEPTH" ] || [ "$DEPTH" -gt 16 ]; then
+    echo "build.sh: call stack too deep for the PIC ($DEPTH > 16): it would reset" >&2
+    exit 1
+fi

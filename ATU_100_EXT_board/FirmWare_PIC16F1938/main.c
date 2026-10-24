@@ -76,6 +76,11 @@ __eeprom unsigned char initial_eeprom[256] = {
 
 void serial_proc(void);
 void send_state(void);
+static void start_tune(void);
+// A tune asked for by the button or over serial: started from the main
+// loop, not from inside button_proc or serial_proc, which would add levels
+// to the deepest call chain (the PIC has a 16-level hardware stack)
+static char g_b_tune_asked = 0;
 static void quick_swr(void);
 
 //***************** Display helpers *****************
@@ -273,6 +278,11 @@ void main()
       else
          button_proc_test();
       serial_proc();
+      if (g_b_tune_asked)
+      {
+         g_b_tune_asked = 0;
+         start_tune();
+      }
       send_state();
       //
       if (g_i_dysp_delay_counter != 0)
@@ -406,9 +416,9 @@ void button_proc_test(void)
 
 void button_proc(void)
 {
-   if ((g_b_tune_btn_released == 0) & Button(&PORTB, TUNE_BUTTON, 50, BUTTON_RELEASED))
+   if ((g_b_tune_btn_released == 0) && Button(&PORTB, TUNE_BUTTON, 50, BUTTON_RELEASED))
       g_b_tune_btn_released = 1;
-   if ((g_b_tune_btn_released == 0) & Button(&PORTB, TUNE_BUTTON, 50, BUTTON_PRESSED))
+   if ((g_b_tune_btn_released == 0) && Button(&PORTB, TUNE_BUTTON, 50, BUTTON_PRESSED))
       g_i_dysp_delay_counter = c_int_dysp_delay_time;
    if ((Button(&PORTB, TUNE_BUTTON, 50, BUTTON_PRESSED) & g_b_tune_btn_released) | g_b_Soft_tune)
    {
@@ -419,8 +429,8 @@ void button_proc(void)
       if (g_b_Soft_tune == 0 & PORTB_TUNE_BUTTON == BUTTON_RELEASED)
          start_reset(); // short press button
       else
-      { // long press button
-         start_tune();
+      { // long press button: the main loop starts it, as for serial
+         g_b_tune_asked = 1;
          g_b_tune_btn_released = 0;
       }
    }
@@ -490,6 +500,10 @@ void send_state(void)
    json_str("Order", (g_c_SW == 1) ? "LC" : "CL");
    json_int("Capacitance", relay_sum(g_c_cap, e_i_Cap), 0);
    json_int("Inductance", relay_sum(g_c_ind, e_i_Ind), 0);
+   // the relays themselves, as RelayI and RelayC take them: the totals do
+   // not tell them apart with measured or linear values
+   json_int("RelayI", g_c_ind & 0x7f, 0);
+   json_int("RelayC", (g_c_cap & 0x7f) | (g_c_SW == 1 ? 0x80 : 0), 0);
    json_end();
 }
 
@@ -552,7 +566,31 @@ static void apply_settings(uint8_t cell)
    show_mode();
 }
 
-// Single characters outside {} act like the buttons
+// Single letters typed by hand (t, r, b, a, s) count only when they are the
+// whole line. Letters left over from a damaged JSON message (one that lost
+// its '{', so "Bypass": true} reads as B, a, t...) never act as button
+// presses, because other characters share their line. Fed every character
+// received; gives the letter when its line ends, else 0.
+static char line_letter(char c)
+{
+   static char letter = 0, others = 0;
+   if (c == '\n' || c == '\r')
+   {
+      char l = others ? 0 : letter;
+      letter = 0;
+      others = 0;
+      return l;
+   }
+   if (c == ' ' || c == '\t')
+      return 0;
+   if (letter || others)
+      others = 1;
+   else
+      letter = c;
+   return 0;
+}
+
+// A letter alone on its line acts like the buttons
 static void serial_char(char c)
 {
    c |= 0x20; // lower case
@@ -564,7 +602,7 @@ static void serial_char(char c)
       start_reset();
       break;
    case 't':
-      start_tune();
+      g_b_tune_asked = 1;
       break;
    case 'b':
       toggle_bypass_mode();
@@ -581,21 +619,25 @@ static void serial_char(char c)
 
 void serial_proc(void)
 {
-   static uint8_t cell;
+   static int cell = -1; // from this message's "Set", for its "Value"
    char c;
 
    while ((c = uart_getc()) != 0)
    {
       CLRWDT();
+      char letter = line_letter(c);
+      if (c == '{')
+         cell = -1; // a new message: a Value needs its own Set
       json_rx_result_t result = json_rx_process(c);
+      if (letter && result == JRR_NOT_JSON)
+         serial_char(letter);
       if (result == JRR_NO_DATA | result == JRR_END)
          continue;
 
       switch (result)
       {
       case JRR_NOT_JSON:
-         serial_char(c);
-         break;
+         break; // letters: above, when their line ends
 
       case JRR_BOOL:
          if (strcmp(json_rx_name, "Auto") == 0)
@@ -613,7 +655,7 @@ void serial_proc(void)
          else if (strcmp(json_rx_name, "Reset") == 0)
             start_reset();
          else if (strcmp(json_rx_name, "Tune") == 0)
-            start_tune();
+            g_b_tune_asked = 1;
          else if (strcmp(json_rx_name, "Raw") == 0)
             send_raw();
          else if (strcmp(json_rx_name, "Status") != 0)
@@ -627,12 +669,24 @@ void serial_proc(void)
          if (strcmp(json_rx_name, "Get") == 0)
             get_eeprom((uint8_t)json_rx_int);
          else if (strcmp(json_rx_name, "Set") == 0)
-            cell = (uint8_t)json_rx_int;
+         {
+            cell = json_rx_int <= 255 ? json_rx_int : -1;
+            if (cell < 0)
+               send_error();
+         }
          else if (strcmp(json_rx_name, "Value") == 0)
          {
-            eeprom_write(cell, (unsigned char)json_rx_int);
-            get_eeprom(cell);
-            apply_settings(cell);
+            // only with a Set earlier in the same message: a damaged one
+            // must not write the cell a previous message named
+            if (cell < 0 || json_rx_int > 255)
+               send_error();
+            else
+            {
+               eeprom_write((uint8_t)cell, (unsigned char)json_rx_int);
+               get_eeprom((uint8_t)cell);
+               apply_settings((uint8_t)cell);
+            }
+            cell = -1;
          }
          else if (strcmp(json_rx_name, "RelayI") == 0)
          {
@@ -680,19 +734,19 @@ char serial_during_tune(void)
 
    while ((c = uart_getc()) != 0)
    {
+      char letter = line_letter(c) | 0x20; // a letter alone on its line
       if (c == '{')
          busy = 0;
       json_rx_result_t result = json_rx_process(c);
       switch (result)
       {
       case JRR_NOT_JSON:
-         c |= 0x20;
-         if (c == 's')
+         if (letter == 's')
          {
             new_state = true;
             send_state();
          }
-         else if (c == 'r' | c == 't')
+         else if (letter == 'r' | letter == 't')
             return 1;
          break;
 
@@ -776,7 +830,10 @@ void tune_btn_push()
    Delay_ms(250); // time for the transmitter to start
    disp(2, 16 + 12 * 4, 1, 4, "TUNE", 4);
    led_swr(0);
+   g_b_tune_given_up = 0;
    tune();
+   if (g_b_tune_given_up)
+      show_reset(); // relays, display and the Reset event, as before
    if (e_c_ledtype == 0)
       led_swr(g_i_SWR);
    else if (g_b_Loss_mode == 0 | e_c_b_Loss_ind == 0)
@@ -999,12 +1056,19 @@ void show_pwr(int parm_Power, int parm_SWR)
 // HighSWR event as soon as one reading with power on it is above the
 // limit; again only after the SWR has dropped 0.1 below it or the power
 // has gone.
+// Samples (one each 3 ms or so in lcd_pwr) the alarm condition must stay
+// clear before an alarm can be sent again: about 2 s, so a gap between CW
+// dits or SSB syllables does not send a new event each time
+#define ALARM_REARM 500
+
 static void swr_alarm(void)
 {
+   static int clear = 0;
    if (e_i_swr_alarm == 0)
       return;
    if (g_i_PWR >= 10 && g_i_SWR >= e_i_swr_alarm)
    {
+      clear = 0;
       if (!g_b_swr_alarm)
       {
          g_b_swr_alarm = 1;
@@ -1015,7 +1079,10 @@ static void swr_alarm(void)
       }
    }
    else if (g_i_PWR < 10 || g_i_SWR < e_i_swr_alarm - 10)
-      g_b_swr_alarm = 0;
+   {
+      if (g_b_swr_alarm && ++clear >= ALARM_REARM)
+         g_b_swr_alarm = 0;
+   }
 }
 
 // One reading straight after the relays changed, so the status that
@@ -1036,10 +1103,12 @@ static void quick_swr(void)
 // board is rated 100 W; a 1:5 tandem match tops out near 37 W
 static void power_alarm(void)
 {
+   static int clear = 0;
    if (e_i_power_alarm == 0)
       return;
    if (g_i_PWR >= e_i_power_alarm)
    {
+      clear = 0;
       if (!g_b_power_alarm)
       {
          g_b_power_alarm = 1;
@@ -1050,7 +1119,10 @@ static void power_alarm(void)
       }
    }
    else if (g_i_PWR < e_i_power_alarm - e_i_power_alarm / 10)
-      g_b_power_alarm = 0;
+   {
+      if (g_b_power_alarm && ++clear >= ALARM_REARM)
+         g_b_power_alarm = 0;
+   }
 }
 
 void lcd_pwr()
