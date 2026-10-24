@@ -58,6 +58,8 @@ extern "C" {
 #define EEPROM_LAST_SWR_H 252
 #define EEPROM_LAST_SWR_L 251
 
+#define EEPROM_SWR_ALARM 0x37
+#define EEPROM_TUNE_MODE 0x36
 #define EEPROM_DISABLE_RELAYS 0x35
 #define EEPROM_FEEDER_LOSS 0x34
 #define EEPROM_ADDITIONAL_INDICATION 0x33
@@ -173,30 +175,17 @@ extern "C" {
 
     void Test_init(void);
 
-    bool out_dummy; //PP5OO
-    bool in_dummy = true; //PP5OO
+    /*  Serial port on the Tx_req pins, 9 and 10 (see README.md): RA6 (/Tx_req)
+        receives, RA7 (Tx_req) transmits. The tuner's Tx_req output is
+        replaced by the "Tune" and "Tuned" events. */
+#define UART_IN_PIN  PORTAbits.RA6
+#define UART_IN_TRIS TRISAbits.TRISA6
+#define UART_OUT_PIN LATAbits.LATA7
+#define UART_OUT_TRIS TRISAbits.TRISA7
 
-#define UART_IN_PIN  PORTBbits.RB2 //PP5OO
-#define UART_IN_TRIS TRISBbits.TRISB2 //PP5OO
-
-#define UART_OUT_PIN  LATBbits.LATB1 //PP5OO
-#define UART_OUT_TRIS TRISBbits.TRISB1 //PP5OO
-
-#define TUNE_BUTTON_PIN  in_dummy //PP5OO
-#define TUNE_BUTTON_TRIS out_dummy //PP5OO
-
-#define AUTO_BUTTON_PIN  in_dummy //PP5OO
-#define AUTO_BUTTON_TRIS out_dummy //PP5OO
-
-#define BYPASS_BUTTON_PIN  in_dummy //PP5OO
-#define BYPASS_BUTTON_TRIS out_dummy //PP5OO
-
-#define PORTB_TUNE_BUTTON in_dummy
-#define PORTB_AUTO_BUTTON in_dummy
-#define PORTB_BYPASS_BUTTON in_dummy
-
-#define n_Tx out_dummy //PP5OO
-#define p_Tx out_dummy //PP5OO
+#define PORTB_TUNE_BUTTON PORTBbits.RB0
+#define PORTB_AUTO_BUTTON PORTBbits.RB1
+#define PORTB_BYPASS_BUTTON PORTBbits.RB2
 
 #define GREEN_LED LATBbits.LATB6
 #define RED_LED LATBbits.LATB7

@@ -1,7 +1,12 @@
 
 #include "cross_compiler.h"
 
-#pragma config FOSC = 0x04
+// Stock N7DDC fuses, except: watchdog on (the code clears it everywhere,
+// 1 s timeout) and low-voltage programming on, so later updates need no
+// 9 V programming voltage. VCAPEN must stay OFF: RA6 is the serial input.
+#pragma config FOSC = INTOSC, WDTE = ON, PWRTE = ON, MCLRE = ON, CP = OFF, CPD = OFF
+#pragma config BOREN = ON, CLKOUTEN = OFF, IESO = ON, FCMEN = ON
+#pragma config WRT = OFF, VCAPEN = OFF, PLLEN = OFF, STVREN = ON, BORV = HI, LVP = ON
 
 
 #ifdef SIMULATOR
@@ -72,8 +77,9 @@ void Delay_ms(const unsigned int time_in_ms)
 unsigned int ADC_Get_Sample(char channel)
 {
   ADCON0bits.CHS = channel;
-  ADCON0bits.ADGO = 1; /* start A/D */
+  Delay_5_us(); /* acquisition time: let the sampling capacitor follow the new channel */
   Delay_5_us();
+  ADCON0bits.ADGO = 1; /* start A/D */
   while (ADCON0bits.ADGO == 1)
     ;
   unsigned char lower = ADRESL;

@@ -5,20 +5,24 @@ ATU-100 control program and library
 When called as a program provides a simple traditional command line control
 of a remote ATU-100.
 
-The AUT-100 needs to be programmed with the hex file from
-https://github.com/ukoda/ATU-100-remote and the 3V TTL serial lines to wire to
-the board to allow comms with this program.
+The ATU-100 needs the firmware from
+https://github.com/randal007/ATU-100-remote (branch display-buttons-uart),
+with the 5 V TTL serial lines on PIC pins 9 and 10 wired to this computer,
+or reached through an Arduino or ESP32 bridge.
 
-This allows the exchanage of JSON format messages to control the ATU-100 and
-show it's status.  The format of the JSON messages is documented in the file
-https://github.com/ukoda/ATU-100-remote/blob/master/README.md
+This allows the exchange of JSON format messages to control the ATU-100 and
+show its status.  The messages are documented in README.md in that repository.
+
+The port can be a serial device (/dev/ttyACM0, COM3) or any pyserial URL,
+such as socket://atu100.local:7000 for a network bridge.
 '''
 
 import argparse
 import datetime
 import json
 import logging
-import serial.tools.list_ports
+import os
+import serial
 import string
 import sys
 
@@ -58,6 +62,8 @@ class cell:
     EEPROM_ADDITIONAL_INDICATION    = 0x33
     EEPROM_FEEDER_LOSS              = 0x34
     EEPROM_DISABLE_RELAYS           = 0x35
+    EEPROM_TUNE_MODE                = 0x36  # 0 = N7DDC's search, else log grid search
+    EEPROM_SWR_ALARM                = 0x37  # HighSWR limit, BCD SWR x 10, 0 = off, ff = 3.0
 
     EEPROM_LAST_SWR_L               = 0xfb
     EEPROM_LAST_SWR_H               = 0xfc
@@ -78,10 +84,18 @@ class atu100(object):
         self.bypass      = False
         self.power       = 0.0
         self.swr         = 0.0
-        self.reverse     = 0.0
+        self.antenna     = None     # power at the antenna, when the tuner reports it
+        self.efficiency  = None     # percent, likewise
+        self.fwd_mv      = None     # detector voltages from request_raw()
+        self.rev_mv      = None
+        self.event       = ''       # last event
+        self.tuning      = False    # between the Tune and Tuned events
+        self.high_swr    = False    # HighSWR seen, cleared when the SWR is below the limit again
+        self.info        = {}       # Board, Credit, FW, Build
         self.order       = 'LC'
         self.capacitance = 0
         self.inductance  = 0
+        self.tune_ended  = False    # Tuned (or Reset) seen since the last Tune
         self.relay_order = False
         self.relay_cap   = [False, False, False, False, False, False, False]
         self.relay_ind   = [False, False, False, False, False, False, False]
@@ -97,7 +111,7 @@ class atu100(object):
         # Open the serial port
 
         try:
-            self.ser = serial.Serial(port = port,
+            self.ser = serial.serial_for_url(port,
                     baudrate = 4800,
                     bytesize=serial.EIGHTBITS,
                     stopbits = serial.STOPBITS_ONE,
@@ -204,7 +218,7 @@ class atu100(object):
 
         if self.json_active:
             while (rxd):
-                ch = rxd.decode("utf-8")
+                ch = rxd.decode('ascii', errors='replace')
                 logging.debug(f'Got {ch}')
                 self.json_buffer += ch
                 if ch == '}':
@@ -214,10 +228,14 @@ class atu100(object):
                         result = json.loads( self.json_buffer)
                     except:
                         logging.warning(f'Invalid JSON reveived: [{self.json_buffer}]')
+                    if isinstance(result, dict) and 'ESP32' in result:
+                        result = None  # the ESP32 bridge's own messages, not the tuner's
 
                     if result:
 
                         # We have a valid JSON message from the tuner, check the info in it
+
+                        self.update(result)
 
                         for name in result:
                             value = result[name]
@@ -250,7 +268,7 @@ class atu100(object):
                                             logging.info(f'Capacitor {offset} is {self.value_cap[offset]}')
 
                                     elif cell_address == cell.EEPROM_LAST_SW:
-                                        self.relay_order = cell_data == '01'
+                                        self.relay_order = cell_data == 1
                                             
                                     elif cell_address == cell.EEPROM_LAST_IND:
                                         bit = 0x1
@@ -269,7 +287,7 @@ class atu100(object):
                 rxd = self.ser.read()
         else:
             while (rxd):
-                ch = rxd.decode("utf-8")
+                ch = rxd.decode('ascii', errors='replace')
                 logging.debug(f'Wait {ch}')
                 if ch == '{':
                     logging.debug('JSON started')
@@ -298,59 +316,138 @@ class atu100(object):
         self.sendbool('Tune', True)
 
 
-    def _print_msg(self, rxmsg):
-        for name in rxmsg:
+    def request_raw(self):
+        # Detector voltages, answered with {"Fwd": mV, "Rev": mV}
+        self.sendbool('Raw', True)
+
+
+    def set_swr_alarm(self, swr):
+        # HighSWR event limit, 1.1 to 9.9, or 0 for off.  Applies at once.
+        tenths = round(swr * 10)
+        if tenths != 0 and not 11 <= tenths <= 99:
+            raise ValueError('SWR alarm must be 0 (off) or 1.1 to 9.9')
+        self.seteepromdata(cell.EEPROM_SWR_ALARM, (tenths // 10) * 16 + tenths % 10)
+
+
+    def set_tune_search(self, original):
+        # True for N7DDC's original search, False for the log grid search
+        self.seteepromdata(cell.EEPROM_TUNE_MODE, 0 if original else 1)
+
+
+    def update(self, rxmsg):
+        # Keep the tuner state from any message it sends
+        for name, value in rxmsg.items():
             if name == 'Auto':
-                self.auto = rxmsg[name]
-                if rxmsg[name]:
-                    print('Auto:        Enabled')
-                else:
-                    print('Auto:        Disabled')
-
+                self.auto = value
             elif name == 'Bypass':
-                self.bypass = rxmsg[name]
-                if rxmsg[name]:
-                    print('Bypass:      Enabled')
-                else:
-                    print('Bypass:      Disabled')
-
+                self.bypass = value
             elif name == 'Power':
-                self.power = rxmsg[name]
-                print(f'Power:       {self.power:.1f}') 
+                self.power = value
+                if 'Antenna' not in rxmsg and 'Order' in rxmsg:  # only sent while the tuner shows it (status lines)
+                    self.antenna = None
+                    self.efficiency = None
+            elif name == 'Antenna':
+                self.antenna = value
+            elif name in ('Efficiency', 'efficency'):  # older builds spelt it so
+                self.efficiency = value
+            elif name == 'SWR':
+                self.swr = value
+                limit = self.swr_alarm()
+                if limit and value < limit - 0.1:
+                    self.high_swr = False
+            elif name == 'Order':
+                self.order = value
+                self.relay_order = value == 'LC'
+            elif name == 'Capacitance':
+                self.capacitance = value
+                bits = self._relays_for(value, self.value_cap)
+                if bits:
+                    self.relay_cap = bits
+            elif name == 'Inductance':
+                self.inductance = value
+                bits = self._relays_for(value, self.value_ind)
+                if bits:
+                    self.relay_ind = bits
+            elif name == 'RelayI':  # the relays themselves (this firmware), exact
+                self.relay_ind = [bool(value >> i & 1) for i in range(7)]
+            elif name == 'RelayC':
+                self.relay_cap = [bool(value >> i & 1) for i in range(7)]
+                self.relay_order = bool(value & 0x80)
+            elif name == 'Fwd':
+                self.fwd_mv = value
+            elif name == 'Rev':
+                self.rev_mv = value
+            elif name in ('Board', 'Credit', 'FW', 'Build'):
+                self.info[name] = value
+            elif name == 'Event':
+                self.event = value
+                if value == 'Tune':
+                    self.tuning = True
+                    self.tune_ended = False
+                elif value in ('Tuned', 'Reset', 'Startup', 'Restart'):
+                    self.tune_ended = True
+                    self.tuning = False
+                elif value == 'HighSWR':
+                    self.high_swr = True
+
+
+    def _relays_for(self, total, values):
+        # Which relays make up a total. Each relay value is larger than all the
+        # smaller ones together, so taking the largest that fits finds the only
+        # answer. None when the values are not known yet or do not add up.
+        if not all(values):
+            return None
+        bits = [False] * 7
+        for relay in range(6, -1, -1):
+            if values[relay] <= total:
+                bits[relay] = True
+                total -= values[relay]
+        return bits if total == 0 else None
+
+
+    def swr_alarm(self):
+        # HighSWR limit from the EEPROM copy, None when not known or off
+        bcd = self.eeprom[cell.EEPROM_SWR_ALARM]
+        if bcd == 0xff:
+            return 3.0
+        if bcd == 0:
+            return None
+        return self.get_bcd(bcd) / 10
+
+
+    def _print_msg(self, rxmsg):
+        for name, value in rxmsg.items():
+            if name in ('Auto', 'Bypass'):
+                print(f'{name + ":":12} {"Enabled" if value else "Disabled"}')
+
+            elif name in ('Power', 'Antenna'):
+                print(f'{name + ":":12} {value:.1f} W')
+
+            elif name in ('Efficiency', 'efficency'):
+                print(f'Efficiency:  {value} %')
 
             elif name == 'SWR':
-                self.swr = rxmsg[name]
-                print(f'SWR:         {self.swr:.1f}') 
-
-            elif name == 'Reverse':
-                self.reverse = rxmsg[name]
-                print(f'Reverse:     {self.reverse:.1f}') 
-
-            elif name == 'Event':
-                print(f'{name+":":12} {rxmsg[name]}')
-
-            elif name == 'Order':
-                self.order = rxmsg[name]
-                print(f'{name+":":12} {rxmsg[name]}') 
+                print(f'SWR:         {value:.2f}')
 
             elif name == 'Capacitance':
-                self.capacitance = rxmsg[name]
-                print(f'Capacitance: {self.capacitance} pF') 
+                print(f'Capacitance: {value} pF')
 
             elif name == 'Inductance':
-                self.inductance = rxmsg[name]
-                print(f'Inductance:  {self.inductance} nH') 
+                print(f'Inductance:  {value} nH')
+
+            elif name in ('Fwd', 'Rev'):
+                print(f'{"Forward:" if name == "Fwd" else "Reflected:":12} {value} mV')
 
             else:
-                print(f'{name+":":12}: {rxmsg[name]}') 
+                print(f'{name + ":":12} {value}')
 
 
     def main(self):
         # Get the command line args
 
         epilog_str = ("Commands can be:\n"
-                      " 'a' - Disable auto tunning\n"
-                      " 'A' - Enable auto tunning\n"
+                      " 'a' - Disable auto tuning\n"
+                      " 'A' - Enable auto tuning\n"
                       " 'b' - Disable bypass\n"
                       " 'B' - Enable bypass\n"
                       " 'c' - Capacitor relay on\n"
@@ -361,12 +458,17 @@ class atu100(object):
                       " 'i' - Inductor relay off\n"
                       " 'I' - Inductor relay on\n"
                       " 'l' - Capacitor last\n"
+                      " 'm' - Monitor: show everything the tuner sends until Ctrl-C\n"
                       " 'r' - Reset tuner, C and L\n"
                       " 's' - Set an EEPROM cell\n"
-                      " 't' - Force tuning\n"
+                      " 't' - Tune (transmit a carrier between the Tune and Tuned events)\n"
                       " 'u' - Upload EEPROM contents to ATU-100\n"
+                      " 'v' - Detector voltages\n"
+                      " 'x' - Restart the tuner\n"
                       "If no command supplied will show current status\n"
                       "Address and data are assumed to be hex format\n"
+                      "The port can also be a URL such as socket://atu100.local:7000\n"
+                      "and defaults to $ATU100_PORT if set\n"
         )
         parser = argparse.ArgumentParser(prog='atu-100',
                                          description='Control program for ATU-100 tuner',
@@ -374,7 +476,7 @@ class atu100(object):
                                          formatter_class=argparse.RawTextHelpFormatter)
 
         parse_general = parser.add_argument_group('General', 'General options')
-        parse_general.add_argument('-p', '--port', default='/dev/ttyACM0', help = 'Serial port for ATU-100')
+        parse_general.add_argument('-p', '--port', default=os.environ.get('ATU100_PORT', '/dev/ttyACM0'), help = 'Serial port or URL for ATU-100')
         parse_general.add_argument('-c', '--command', default='', help = 'Command, as listed below')
         parse_general.add_argument('--logfile', default='atu100.log', help = 'Log filename (atu100.log)')
         parse_general.add_argument('--log-level', type=str,
@@ -387,6 +489,8 @@ class atu100(object):
         parse_config.add_argument('-a', '--address', default='', help = 'EEPROM address for get or set commands')
         parse_config.add_argument('-d', '--data', default='', help = 'EEPROM data for set command')
         parse_config.add_argument('-r', '--relay', default=0, help = 'Relay number, 0 to 6')
+        parse_config.add_argument('--swr-alarm', type=float, help = 'Set the HighSWR event limit, e.g. 2.5, or 0 for off')
+        parse_config.add_argument('--search', choices=['grid', 'original'], help = "Set the tuning search: grid (default) or N7DDC's original")
 
         self.args = parser.parse_args()
 
@@ -406,6 +510,17 @@ class atu100(object):
 
         # Get information from the tuner
 
+        if self.args.swr_alarm is not None or self.args.search:
+            if self.args.swr_alarm is not None:
+                print(f'HighSWR limit: {self.args.swr_alarm:.1f}' if self.args.swr_alarm else 'HighSWR event off')
+                self.set_swr_alarm(self.args.swr_alarm)
+                self.wait_name(f'{cell.EEPROM_SWR_ALARM:02x}')
+            if self.args.search:
+                print(f'Tuning search: {self.args.search}')
+                self.set_tune_search(self.args.search == 'original')
+                self.wait_name(f'{cell.EEPROM_TUNE_MODE:02x}')
+            return
+
         if self.args.command == 'a':
             print('Disabling auto tuner mode')
             self.sendbool('Auto', False)
@@ -416,7 +531,7 @@ class atu100(object):
 
         elif self.args.command == 'b':
             print('Disabling bypass')
-            self.sendbool('Bypass', True)
+            self.sendbool('Bypass', False)
 
         elif self.args.command == 'B':
             print('Enabling bypass')
@@ -490,14 +605,23 @@ class atu100(object):
             self.send_relay_inductors()
 
         elif self.args.command == 'r':
-            print('Reseting settings')
-            eventexpected = True
+            print('Resetting settings')
             self.sendbool('Reset', True)
 
         elif self.args.command == 't':
-            print('Stating tuning')
-            eventexpected = True
+            print('Starting tuning: transmit a carrier until the Tuned event')
             self.sendbool('Tune', True)
+
+        elif self.args.command == 'v':
+            self.request_raw()
+
+        elif self.args.command == 'x':
+            print('Restarting the tuner')
+            self.send_restart()
+
+        elif self.args.command == 'm':
+            print('Showing everything the tuner sends, Ctrl-C to stop')
+            self.sendbool('Status', True)
 
         elif self.args.command == 'g':
             if self.args.address == '':
@@ -525,10 +649,36 @@ class atu100(object):
 
             # Check for a new JSON message
 
-            rxmsg = self.getmsg()
+            try:
+                rxmsg = self.getmsg()
+            except KeyboardInterrupt:
+                break
             if rxmsg:
                 logging.debug(rxmsg)
+
+                # Monitor: everything, one line each
+
+                if self.args.command == 'm':
+                    print(datetime.now().strftime('%H:%M:%S'), json.dumps(rxmsg))
+                    continue
+
                 print()
+
+                # Events: show them, and keep waiting for the status after a tune
+
+                if 'Event' in rxmsg:
+                    self._print_msg(rxmsg)
+                    if self.args.command == 'x' and rxmsg['Event'] in ('Startup', 'Restart'):
+                        break
+                    continue
+
+                # Detector voltages
+
+                if self.args.command == 'v':
+                    if 'Fwd' in rxmsg:
+                        self._print_msg(rxmsg)
+                        break
+                    continue
 
                 # EEPROM Dump command
 
@@ -556,6 +706,8 @@ class atu100(object):
 
                 else:
                     result = 'Power' in rxmsg
+                    if self.args.command == 't' and not self.tune_ended:
+                        result = False  # a status from before the tune ended
                     self._print_msg(rxmsg)
                     if result:
                         break

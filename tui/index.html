@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- atutop in the browser, served by the ESP32 bridge. No outside
+         fonts or scripts: it must work off-grid on the bridge's hotspot. -->
+    <!-- interactive-widget: a phone's keyboard covers the page instead of
+         shrinking it, so the screen does not redraw under the field being typed in -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, interactive-widget=resizes-visual" />
+    <meta name="theme-color" content="#121212" />
+    <title>atutop</title>
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <style>
+      /* the visible height: on a phone 100% would reach under the browser's
+         own toolbar and hide the bottom row of buttons */
+      html, body { margin: 0; height: 100%; height: 100dvh; background: #121212; overflow: hidden; }
+      pre {
+        font-family: "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 15px;
+        margin: 0;
+      }
+      @media (max-width: 700px) { pre { font-size: 13px; } }
+      /* no browser panning on the screen: a finger drags atutop's scroll bars */
+      #screen { position: fixed; inset: 0; touch-action: none; }
+      #screen_ratzilla_grid:focus { outline: none; }
+      /* real text boxes over the settings fields, for phones' keyboards */
+      .atu_field {
+        position: fixed; display: none; z-index: 10; box-sizing: border-box;
+        margin: 0; padding: 0 0 0 0.6ch; border: 0; outline: 1px solid #444;
+        background: #303030; color: #eeeeee; caret-color: #b54040;
+        font-family: "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 16px; /* 16px or more: phones do not zoom in on focus */
+      }
+      .atu_field:focus { outline-color: #b54040; }
+    </style>
+  </head>
+  <!-- Ratzilla draws into #screen and empties it on every resize; the text
+       boxes for phones live outside it, in <body> -->
+  <body><div id="screen"></div></body>
+</html>
