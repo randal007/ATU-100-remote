@@ -18,7 +18,7 @@
 #define DEFAULT_INITIAL_OLD_VALUE  10000
 
 // Sent at start-up as "Build"; raise the revision with each release
-#define FW_REVISION "1.0"
+#define FW_REVISION "1.0.1"
 #define FW_BUILD    "VE7NHW display+serial " FW_REVISION ", " __DATE__
 
 // Variables
@@ -173,6 +173,7 @@ void main()
       g_b_Restart = 1;
    pic_init();
    uart_init();
+   uart_putc('\n'); // ends a line the reset may have cut off
    if (g_b_Restart)
       json_event("Restart"); // the watchdog reset the tuner
    //
@@ -556,13 +557,15 @@ static void apply_settings(uint8_t cell)
    cells_init();
    if (cell != EEPROM_AUTOMATIC_MODE || g_b_Bypas_mode)
       g_b_Auto_mode = auto_mode; // bypass keeps auto off until it ends
-   if (cell <= EEPROM_DISPLAY_OFFSET_LEFT)
+   if (cell <= EEPROM_DISPLAY_TYPE || cell == EEPROM_DISPLAY_OFFSET_DOWN || cell == EEPROM_DISPLAY_OFFSET_LEFT)
    { // display address, type or position: start the display again
       Soft_I2C_Init();
       led_init();
       g_b_lcd_prep_short = 1;
       lcd_prep();
+      g_b_Loss_mode = 0; // lcd_prep drew L and C: ANT and EFF are drawn again
    }
+   g_i_dysp_delay_counter = c_int_dysp_delay_time; // the display-off timer starts again
    show_mode();
 }
 
@@ -667,19 +670,20 @@ void serial_proc(void)
          break;
 
       case JRR_INT:
-         if (strcmp(json_rx_name, "Get") == 0)
+         if (json_rx_int < 0 || json_rx_int > 255)
+         { // every number taken is a cell, a byte or relay bits
+            send_error();
+            cell = -1;
+         }
+         else if (strcmp(json_rx_name, "Get") == 0)
             get_eeprom((uint8_t)json_rx_int);
          else if (strcmp(json_rx_name, "Set") == 0)
-         {
-            cell = json_rx_int <= 255 ? json_rx_int : -1;
-            if (cell < 0)
-               send_error();
-         }
+            cell = json_rx_int;
          else if (strcmp(json_rx_name, "Value") == 0)
          {
             // only with a Set earlier in the same message: a damaged one
             // must not write the cell a previous message named
-            if (cell < 0 || json_rx_int > 255)
+            if (cell < 0)
                send_error();
             else
             {
@@ -695,7 +699,8 @@ void serial_proc(void)
             set_ind(g_c_ind);
             eeprom_write(EEPROM_LAST_IND, g_c_ind);
             quick_swr();
-            lcd_ind();
+            if (g_b_Loss_mode == 0) // else ANT and EFF are on those rows
+               lcd_ind();
          }
          else if (strcmp(json_rx_name, "RelayC") == 0)
          {
@@ -706,7 +711,8 @@ void serial_proc(void)
             eeprom_write(EEPROM_LAST_CAP, g_c_cap);
             eeprom_write(EEPROM_LAST_SW, g_c_SW);
             quick_swr();
-            lcd_ind();
+            if (g_b_Loss_mode == 0)
+               lcd_ind();
          }
          else
             send_error();

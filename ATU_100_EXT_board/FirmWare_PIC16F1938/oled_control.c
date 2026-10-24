@@ -321,10 +321,9 @@ static void oled_wr_str(char col, char page, char str[], char leng)
    //
    for (i = 0; i < leng; i++)
    { // write string
-      if (str[i] == 0)
+      g = str[i] - 32; // 0, and anything the font lacks, shows a space
+      if (g > 95)
          g = 0;
-      else
-         g = str[i] - 32; // NULL detection
       for (h = 0; h <= 4; h++)
       { // write letter
          w1.bytes = font5x8[g * 5 + h];
@@ -361,10 +360,9 @@ static void oled_wr_str(char col, char page, char str[], char leng)
    //
    for (i = 0; i < leng; i++)
    { // write string
-      if (str[i] == 0)
+      g = str[i] - 32; // 0, and anything the font lacks, shows a space
+      if (g > 95)
          g = 0;
-      else
-         g = str[i] - 32; // NULL detection
       for (h = 0; h <= 4; h++)
       { // write letter
          w1.bytes = font5x8[g * 5 + h];

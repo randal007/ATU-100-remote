@@ -219,17 +219,7 @@ void get_pwr() {
 void get_swr() {
     uint32_t timeout = 0;
 
-    get_pwr();
-    if (g_char_p_cnt != 100) {
-        g_char_p_cnt += 1;
-        if (g_i_PWR > g_i_P_max)
-            g_i_P_max = g_i_PWR;
-    } else {
-        g_char_p_cnt = 0;
-        show_pwr(g_i_P_max, g_i_SWR);
-        g_i_P_max = 0;
-    }
-    while ((g_i_PWR < e_i_watts_min_for_start) | (g_i_PWR > e_i_watts_max_for_start & e_i_watts_max_for_start > 0)) { // waiting for good power
+    for (;;) {
         CLRWDT();
         get_pwr();
         if (g_char_p_cnt != 100) {
@@ -241,21 +231,24 @@ void get_swr() {
             show_pwr(g_i_P_max, g_i_SWR);
             g_i_P_max = 0;
         }
-        //
+        // A Reset or Tune message stops the tune at any reading, not only
+        // while it waits for carrier (else it would act after the tune:
+        // a second tune, or the relays reset). Status and Raw are answered,
+        // other messages get Busy
+        if (serial_during_tune())
+            break;
+        if (!((g_i_PWR < e_i_watts_min_for_start) | (g_i_PWR > e_i_watts_max_for_start & e_i_watts_max_for_start > 0)))
+            return; // good power
+        // Waiting for carrier: give up after about a minute, or on the Tune button
         if (Button(&PORTB, TUNE_BUTTON, 5, BUTTON_RELEASED))
             g_b_rready = 1;
-
-        // Give up after about a minute, on the Tune button, or on a Reset
-        // or Tune message (other messages are answered while waiting)
-        if ((timeout++ > 7200) || serial_during_tune() || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED))) {
-            // show_reset() from here went 17 calls deep with the OLED, past
-            // the PIC's 16-level stack: the chip restarted
-            g_b_tune_given_up = 1;
-            g_i_SWR = 0;
-            return;
-        }
-    } //  good power
-    return;
+        if ((timeout++ > 7200) || ((g_b_rready == 1) & Button(&PORTB, TUNE_BUTTON, 5, BUTTON_PRESSED)))
+            break;
+    }
+    // show_reset() from here went 17 calls deep with the OLED, past the
+    // PIC's 16-level stack: the chip restarted. tune_btn_push does it
+    g_b_tune_given_up = 1;
+    g_i_SWR = 0;
 }
 
 void set_ind(char Ind) {
@@ -362,6 +355,8 @@ void coarse_tune() {
     for (l_coarse_tune_count = 0; l_coarse_tune_count <= 31;) {
         set_ind(l_coarse_tune_count * g_c_L_mult);
         coarse_cap();
+        if (g_i_SWR == 0)
+            return; // given up in coarse_cap: get_swr would wait again
         get_swr();
         if (g_i_SWR == 0)
             return;

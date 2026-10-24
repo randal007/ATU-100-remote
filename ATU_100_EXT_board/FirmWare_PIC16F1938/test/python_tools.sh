@@ -29,6 +29,7 @@ expect "tune result" "$out" "SWR: +1\.[0-4]"
 expect "detector voltages" "$(atu -c v)" "Forward: +[0-9]+ mV"
 atu --swr-alarm 2.5 > /dev/null
 expect "HighSWR limit" "$(atu -c g -a 37)" "37 = 25"
+expect "HighSWR limit out of range refused" "$(atu --swr-alarm 10 2>&1)" "1\.1 to 9\.9, or 0 for off"
 atu --search original > /dev/null
 expect "tuning search" "$(atu -c g -a 36)" "36 = 00"
 atu -c C -r 0 > /dev/null

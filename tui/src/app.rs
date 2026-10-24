@@ -93,7 +93,9 @@ impl Settings {
         }
     }
 
-    /// Longest text a field takes, and whether a character belongs in it
+    /// Longest text a field takes, in bytes as the bridge counts them (a
+    /// Wi-Fi name is at most 32 bytes, so fewer letters outside ASCII), and
+    /// whether a character belongs in it
     pub fn accepts(f: Field, c: char) -> (usize, bool) {
         match f {
             Field::Network => (32, true),
@@ -146,20 +148,22 @@ pub enum Effect {
 pub struct Outbox {
     pub queue: VecDeque<String>,
     sent_at: Option<Instant>,
+    sent: String, // the command waiting for its answer
     recent: VecDeque<(Instant, String)>, // sent in the last second
 }
 
-/// What a newer command replaces: {"Set": 55, ...} by cell, others by name.
-/// Tune, Reset and the ESP32 bridge's commands always go.
+/// What a newer command replaces: {"Set": 55, ...} by cell, others by name
+/// (a second Tune press while one waits is the same Tune). Reset and the
+/// ESP32 bridge's commands always go.
 fn replaces(msg: &str) -> Option<&str> {
     let end = if msg.starts_with(r#"{"Set""#) { msg.find(',')? } else { msg.find(':')? };
     let key = &msg[..end];
-    (!key.contains("Tune") && !key.contains("Reset") && !key.contains("ESP32")).then_some(key)
+    (!key.contains("Reset") && !key.contains("ESP32")).then_some(key)
 }
 
 impl Outbox {
     pub fn new() -> Outbox {
-        Outbox { queue: VecDeque::new(), sent_at: None, recent: VecDeque::new() }
+        Outbox { queue: VecDeque::new(), sent_at: None, sent: String::new(), recent: VecDeque::new() }
     }
 
     pub fn push(&mut self, msg: String) {
@@ -169,9 +173,33 @@ impl Outbox {
         self.queue.push_back(msg);
     }
 
-    /// The tuner said something: ready for the next command
-    fn answered(&mut self) {
-        self.sent_at = None;
+    /// A line came: if it answers the command sent, the next one may go.
+    /// Status lines come by themselves while there is power, so a burst of
+    /// Sets must wait for each cell's own reply, or it would overrun the
+    /// tuner's 128-byte buffer. `bridge`: the ESP32 bridge's own line
+    fn answered(&mut self, line: &str, bridge: bool) {
+        let num = |key: &str| -> Option<u64> {
+            let rest = &self.sent[self.sent.find(key)? + key.len()..];
+            rest.trim_start_matches([':', ' ']).split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+        };
+        let answers = if self.sent.contains("ESP32") {
+            bridge
+        } else if bridge {
+            false
+        } else if line.contains(r#""Event":"Error""#) || line.contains(r#""Event":"Busy""#) {
+            true
+        } else if let Some(cell) = num(r#""Set""#).or_else(|| num(r#""Get""#)) {
+            line.contains(&format!(r#""{cell:02x}":""#))
+        } else if self.sent.contains("Dump") {
+            line.contains(r#""ff":"#)
+        } else if self.sent.contains("Raw") {
+            line.contains(r#""Fwd""#)
+        } else {
+            true
+        };
+        if answers {
+            self.sent_at = None;
+        }
     }
 
     /// A status line the tuner sent before it read our commands would undo
@@ -220,9 +248,9 @@ impl Outbox {
     }
 
     /// Send the next command once the last was answered, or after a second.
-    /// While tuning only Reset (to stop it), Status and Raw go: the tuner
-    /// answers those while it waits for carrier. The ESP32 bridge answers
-    /// its own at any time.
+    /// While tuning only Reset and Tune (both stop it), Status and Raw go:
+    /// the tuner answers those while it tunes. The ESP32 bridge answers its
+    /// own at any time.
     fn pump(&mut self, send: &mut dyn FnMut(&str), tuning: bool) {
         if self.sent_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
             return;
@@ -230,11 +258,12 @@ impl Outbox {
         self.sent_at = None;
         // While tuning, the first command allowed then, wherever it is in
         // the queue: a Bypass waiting at the front must not hold back a Reset
-        let allowed = |m: &String| !tuning || ["Reset", "Status", "Raw", "ESP32"].iter().any(|k| m.contains(k));
+        let allowed = |m: &String| !tuning || ["Reset", "Tune", "Status", "Raw", "ESP32"].iter().any(|k| m.contains(k));
         if let Some(i) = self.queue.iter().position(allowed) {
             let msg = self.queue.remove(i).unwrap();
             send(&msg);
             self.sent_at = Some(Instant::now());
+            self.sent = msg.clone();
             self.recent.push_back((Instant::now(), msg));
         }
     }
@@ -251,6 +280,7 @@ pub struct Core {
     last_poll: Instant,
     last_raw: Instant,
     last_info: Instant,
+    last_dump: Instant,
 }
 
 impl Core {
@@ -278,6 +308,7 @@ impl Core {
             last_poll: now,
             last_raw: now,
             last_info: now,
+            last_dump: now,
         }
     }
 
@@ -288,6 +319,7 @@ impl Core {
             self.t = Tuner { events: std::mem::take(&mut self.t.events), ..Tuner::new() };
             self.out.clear();
             self.out.push(r#"{"Dump": "EEPROM"}"#.into());
+            self.last_dump = Instant::now(); // the dump takes 5 s at 4800 baud
         }
         self.app.port = port.to_string();
         self.app.link_error = None;
@@ -309,7 +341,7 @@ impl Core {
     pub fn line(&mut self, line: &str) {
         if let Ok(serde_json::Value::Object(m)) = serde_json::from_str(line) {
             if self.app.esp.line(&m) {
-                self.out.answered();
+                self.out.answered(line, true);
                 return; // the bridge's own message
             }
         }
@@ -318,7 +350,7 @@ impl Core {
             self.out.refused();
         }
         self.out.reapply(&mut self.t);
-        self.out.answered();
+        self.out.answered(line, false);
     }
 
     /// Now and then: graphs, polls, and the next command onto the link
@@ -343,6 +375,18 @@ impl Core {
         if self.app.detector && self.last_raw.elapsed() >= Duration::from_secs(1) && self.t.dumped && self.out.idle() {
             self.last_raw = Instant::now();
             self.out.push(r#"{"Raw": true}"#.into());
+        }
+        // No EEPROM yet: the tuner was busy tuning, or the long dump line
+        // was damaged. Ask again (the polls above wait for it)
+        if !self.t.dumped && !self.t.tuning && self.last_dump.elapsed() >= Duration::from_secs(10) && self.out.idle() {
+            self.last_dump = Instant::now();
+            self.out.push(r#"{"Dump": "EEPROM"}"#.into());
+        }
+        // The firmware gives up waiting for carrier after about a minute; a
+        // tune still "on" after 70 s lost its Tuned on the way
+        if self.t.tuning && self.t.tuning_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(70)) {
+            self.t.tuning = false;
+            self.t.log("No end of the tune heard: commands go out again", Kind::Warn);
         }
         if self.app.link_error.is_none() && !self.app.port.is_empty() {
             self.out.pump(send, self.t.tuning);
@@ -477,7 +521,13 @@ impl Core {
         let Some(s) = self.app.settings.as_mut() else { return };
         let field = s.field;
         let (max, _) = Settings::accepts(field, ' ');
-        let clean: String = text.chars().filter(|c| Settings::accepts(field, *c).1).take(max).collect();
+        let mut clean = String::new();
+        for c in text.chars().filter(|c| Settings::accepts(field, *c).1) {
+            if clean.len() + c.len_utf8() > max {
+                break;
+            }
+            clean.push(c);
+        }
         *s.text(field) = clean;
         if field == Field::Network {
             s.selected = None;
@@ -524,7 +574,7 @@ impl Core {
                     return None;
                 }
                 let text = s.text(field);
-                if text.chars().count() < max {
+                if text.len() + c.len_utf8() <= max {
                     text.push(c);
                 }
                 if field == Field::Network {
@@ -684,14 +734,14 @@ impl Core {
                 }
                 out.push(PROBE.into());
                 if esp.present == Some(true) && esp.may_set_wifi && esp.networks.is_empty() {
-                    esp.scanning = true;
+                    esp.start_scan();
                     out.push(r#"{"ESP32": "Scan"}"#.into());
                 }
             }
             Action::CloseSettings => app.settings = None,
             Action::Scan => {
                 if app.esp.present == Some(true) && !app.esp.scanning {
-                    app.esp.scanning = true;
+                    app.esp.start_scan();
                     out.push(r#"{"ESP32": "Scan"}"#.into());
                 }
             }
@@ -901,7 +951,37 @@ impl Core {
                 }
             }
             Action::Quit => return Some(Effect::Quit),
+            Action::Hint => {}
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commands_wait_for_their_own_answer() {
+        let mut out = Outbox::new();
+        out.push(r#"{"Set": 55, "Value": 37}"#.into());
+        out.push(r#"{"Set": 4, "Value": 19}"#.into());
+        let mut sent = vec![];
+        out.pump(&mut |m| sent.push(m.to_string()), false);
+        assert_eq!(sent.len(), 1);
+        // a status line that came by itself does not answer a Set
+        out.answered(r#"{"Auto":false,"Power":10.0,"SWR":1.10}"#, false);
+        out.pump(&mut |m| sent.push(m.to_string()), false);
+        assert_eq!(sent.len(), 1);
+        // the cell's own reply does
+        out.answered(r#"{"37":"25"}"#, false);
+        out.pump(&mut |m| sent.push(m.to_string()), false);
+        assert_eq!(sent.len(), 2);
+        // a refusal does too, and a Status takes any line
+        out.answered(r#"{"Event":"Error"}"#, false);
+        out.push(r#"{"Status": true}"#.into());
+        out.pump(&mut |m| sent.push(m.to_string()), false);
+        out.answered(r#"{"Auto":false}"#, false);
+        assert!(out.idle());
     }
 }

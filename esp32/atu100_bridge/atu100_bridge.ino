@@ -110,6 +110,11 @@ template <size_t LINE> struct LineBuf {
       overflow = true; // too long: dropped whole
     return false;
   }
+  // A new client in this place: nothing of the last one's carries over
+  void reset() {
+    n = 0;
+    overflow = false;
+  }
 };
 
 LineBuf<LINE_MAX> usbLine, megaLine, tcpLine[MAX_TCP], wsLine[MAX_WS];
@@ -122,7 +127,7 @@ const char *wifiName[] = {"Off", "Connecting", "Connected", "Failed"};
 String ssid, pass, staticIp, gateway, mask;
 uint32_t wifiSince = 0, retryAt = 0, hotspotOffAt = 0;
 bool hotspot = false, hotspotAlways = false;
-int scanFor = -1; // who asked for a scan in progress
+uint32_t scanFor = 0; // who is waiting for the scan in progress: bit (1 << who)
 
 // The tuner, for the web page
 String lastStatus;
@@ -239,6 +244,7 @@ void wifiLoop() {
         hotspotOffAt = now + HOTSPOT_LINGER; // time for the setup page to say so
     } else if (now - wifiSince > JOIN_TIMEOUT) {
       wifiState = W_FAILED;
+      WiFi.disconnect(); // no retrying in the background: it moves the hotspot's channel
       startHotspot();
       retryAt = now + RETRY_EVERY;
     }
@@ -354,11 +360,11 @@ void command(int who, JsonDocument &doc) {
   String cmd = doc["ESP32"] | "";
   if (cmd == "Info") {
     sendInfo(who);
-  } else if (cmd == "Scan") {
-    if (scanFor < 0 && WiFi.scanNetworks(true) == WIFI_SCAN_FAILED)
+  } else if (cmd == "Scan") { // one scan answers everyone who asked during it
+    if (!scanFor && WiFi.scanNetworks(true) == WIFI_SCAN_FAILED)
       notice(who, "Error", "scan failed");
     else
-      scanFor = who;
+      scanFor |= 1UL << who;
   } else if ((cmd == "WiFi" || cmd == "Forget" || cmd == "Hotspot") && !maySetWifi(who)) {
     notice(who, "Error", "Wi-Fi settings change over USB or the bridge's hotspot only");
   } else if (cmd == "WiFi") {
@@ -372,11 +378,11 @@ void command(int who, JsonDocument &doc) {
   } else if (cmd == "Hotspot") {
     hotspotAlways = doc["Always"] | false;
     saveSettings();
+    notice(who, "OK", hotspotAlways ? "hotspot always on" : "hotspot only when there is no network");
     if (hotspotAlways)
       startHotspot();
-    else if (wifiState == W_CONNECTED)
-      stopHotspot();
-    notice(who, "OK", hotspotAlways ? "hotspot always on" : "hotspot only when there is no network");
+    else if (wifiState == W_CONNECTED && hotspot)
+      hotspotOffAt = millis() + HOTSPOT_LINGER; // not at once: the asker may be on it
   } else if (cmd == "Forget") {
     ssid = pass = staticIp = gateway = mask = "";
     saveSettings();
@@ -390,29 +396,33 @@ void command(int who, JsonDocument &doc) {
 }
 
 void scanLoop() {
-  if (scanFor < 0)
+  if (!scanFor)
     return;
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING)
     return;
-  if (n < 0) {
-    notice(scanFor, "Error", "scan failed");
-  } else {
+  for (int who = 0; who < 32; who++) {
+    if (!(scanFor >> who & 1))
+      continue;
+    if (n < 0) {
+      notice(who, "Error", "scan failed");
+      continue;
+    }
     for (int i = 0; i < n; i++) {
       JsonDocument d;
       d["ESP32"] = "Net";
       d["SSID"] = WiFi.SSID(i);
       d["RSSI"] = WiFi.RSSI(i);
       d["Secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-      reply(scanFor, d);
+      reply(who, d);
     }
     JsonDocument d;
     d["ESP32"] = "Scan";
     d["Count"] = n;
-    reply(scanFor, d);
+    reply(who, d);
   }
   WiFi.scanDelete();
-  scanFor = -1;
+  scanFor = 0;
 }
 
 // A whole line from a client: the bridge's own, or for the tuner
@@ -500,7 +510,7 @@ void wsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
   if (num >= MAX_WS)
     return;
   if (type == WStype_CONNECTED)
-    wsLine[num].n = 0;
+    wsLine[num].reset();
   else if (type == WStype_TEXT)
     for (size_t i = 0; i < length; i++)
       if (wsLine[num].add(payload[i]))
@@ -597,12 +607,20 @@ void webSetup() {
     web.send(200, "text/html", body);
     return;
   }
-  int n = WiFi.scanNetworks(); // a few seconds; fine for a setup page
+  // A few seconds; fine for a setup page. A scan already running for
+  // atutop is shared, not wiped: scanLoop answers it and deletes it
+  int n;
+  if (scanFor)
+    while ((n = WiFi.scanComplete()) == WIFI_SCAN_RUNNING)
+      delay(100);
+  else
+    n = WiFi.scanNetworks();
   String opts;
   for (int i = 0; i < n; i++)
     opts += "<option value=\"" + htmlEscape(WiFi.SSID(i)) + "\">" + htmlEscape(WiFi.SSID(i)) + " (" +
             String(WiFi.RSSI(i)) + " dBm)</option>";
-  WiFi.scanDelete();
+  if (!scanFor)
+    WiFi.scanDelete();
   String body =
       "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
       "<title>ATU-100 Wi-Fi</title><body style='font:16px sans-serif;background:#111;color:#ccc;padding:1em'>"
@@ -630,6 +648,9 @@ void setup() {
   Serial.begin(115200);    // USB: the speed does not matter
   Serial.setTxTimeoutMs(0); // never wait for a computer that is not there
   mega.setTxBufferSize(4096);
+  // And a receive buffer for the dump too: the page files and Wi-Fi scans
+  // can hold the loop up for seconds (256 bytes last 0.5 s at 4800 baud)
+  tuner.setRxBufferSize(4096);
   tuner.begin(TUNER_BAUD, SERIAL_8N1, TUNER_RX, TUNER_TX);
   mega.begin(TUNER_BAUD, SERIAL_8N1, MEGA_RX, MEGA_TX);
   // Pull-ups on the inputs, quiet when nothing is connected. Not pinMode():
@@ -685,7 +706,7 @@ void loop() {
     else {
       tcp[free] = c;
       tcp[free].setNoDelay(true);
-      tcpLine[free].n = 0;
+      tcpLine[free].reset();
     }
   }
   for (int i = 0; i < MAX_TCP; i++)

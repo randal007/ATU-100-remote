@@ -40,6 +40,7 @@ pub struct Esp {
     pub networks: Vec<Net>,
     found: Vec<Net>, // a scan coming in
     pub scanning: bool,
+    scan_since: Option<Instant>,
     /// Last answer to a command: text, and whether it was an error
     pub notice: Option<(String, bool)>,
 }
@@ -52,11 +53,22 @@ impl Esp {
         self.probed_at = Some(Instant::now());
     }
 
-    /// Nothing answered the probe in time: no bridge on this link
+    /// Nothing answered the probe in time: no bridge on this link. And a
+    /// scan whose answer never came (lost, or another client's scan took
+    /// it) must not leave the scan button off for good
     pub fn check_probe(&mut self) {
         if self.present.is_none() && self.probed_at.is_some_and(|t| t.elapsed() > Duration::from_secs(3)) {
             self.present = Some(false);
         }
+        if self.scanning && self.scan_since.is_some_and(|t| t.elapsed() > Duration::from_secs(20)) {
+            self.scanning = false;
+        }
+    }
+
+    /// A scan asked for
+    pub fn start_scan(&mut self) {
+        self.scanning = true;
+        self.scan_since = Some(Instant::now());
     }
 
     /// Start again after the link changed

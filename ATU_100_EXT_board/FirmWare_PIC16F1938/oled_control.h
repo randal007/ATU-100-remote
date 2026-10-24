@@ -1,3 +1,5 @@
+#ifndef OLED_CONTROL_H
+#define OLED_CONTROL_H
 
 #include "cross_compiler.h"
 
@@ -9,3 +11,5 @@ void led_wr_str(char, char, char *, char);
 void led_init(void);
 
 void Soft_I2C_Init(void);
+
+#endif

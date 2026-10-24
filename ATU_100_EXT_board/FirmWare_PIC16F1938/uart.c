@@ -53,11 +53,19 @@ void __interrupt() isr(void) {
                 rx_byte |= 0x80;
             rx_bits--;
         } else {
-            if (UART_IN_PIN && ((rx_in + 1) & (RX_LEN - 1)) != rx_out) {
-                rx_buf[rx_in] = rx_byte;
-                rx_in = (rx_in + 1) & (RX_LEN - 1);
-                if (rx_byte == '{')
-                    rx_messages++;
+            if (UART_IN_PIN) { // a stop bit: the byte is good
+                if (((rx_in + 1) & (RX_LEN - 1)) != rx_out) {
+                    rx_buf[rx_in] = rx_byte;
+                    rx_in = (rx_in + 1) & (RX_LEN - 1);
+                    if (rx_byte == '{')
+                        rx_messages++;
+                } else { // full: the byte is lost. End the line at the gap,
+                    // so the damaged message is dropped, not joined to the next
+                    uint8_t last = (rx_in - 1) & (RX_LEN - 1);
+                    if (rx_buf[last] == '{')
+                        rx_messages--;
+                    rx_buf[last] = '\n';
+                }
             }
             rx_bits = 0;
         }

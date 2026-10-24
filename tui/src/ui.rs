@@ -76,6 +76,7 @@ pub enum Action {
     WindingApply,
     WindingCancel,
     Quit,
+    Hint, // a key-bar label that is not a button (↑↓, Tab)
 }
 
 /// Screen areas the mouse can click, filled in while drawing.
@@ -249,7 +250,7 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
         draw_winding(f, body, t, app, &mut hits);
         let keys_list = [
             ("Esc", "cancel", Action::WindingCancel, false),
-            ("↑↓", "choose", Action::WindingCancel, false),
+            ("↑↓", "choose", Action::Hint, false),
             ("Space", "tunes from too", Action::WindingSetMin, false),
             ("Enter", "apply", Action::WindingApply, false),
         ];
@@ -258,32 +259,30 @@ pub fn draw(f: &mut Frame, t: &Tuner, app: &App) -> Hits {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_connect(f, body, app, &mut hits);
         let keys_list = [
-            ("Esc", if app.port.is_empty() { "quit" } else { "close" }, Action::CloseConnect, false),
-            ("↑↓", "choose", Action::ConnectRefresh, false),
+            ("Esc", if app.port.is_empty() { "quit" } else { "close" }, if app.port.is_empty() { Action::Quit } else { Action::CloseConnect }, false),
+            ("↑↓", "choose", Action::Hint, false),
             ("Enter", "connect", Action::ConnectGo, false),
             ("Tab", "address", Action::ConnectType, false),
             ("F5", "search again", Action::ConnectRefresh, false),
         ];
         draw_key_list(f, keys, &keys_list, &mut hits);
-        hits.areas.retain(|(r, a)| r.y != keys.y || *a != Action::ConnectRefresh || r.x > keys.x + 20); // ↑↓ is not a button
     } else if app.atu.is_some() {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_atu(f, body, t, app, &mut hits);
         let keys_list = [
             ("Esc", "close", Action::AtuClose, false),
-            ("↑↓", "setting", Action::AtuPick(0), false),
+            ("↑↓", "setting", Action::Hint, false),
             ("Enter", "set", Action::AtuSet, false),
         ];
         draw_key_list(f, keys, &keys_list, &mut hits);
-        hits.areas.retain(|(r, a)| r.y < keys.y || *a != Action::AtuPick(0)); // ↑↓ on the bar is not a button
     } else if app.settings.is_some() {
         hits = Hits::default(); // the box takes all the clicks while it is open
         draw_settings(f, body, app, &mut hits);
         let typing = app.esp.present == Some(true) && app.esp.may_set_wifi;
         let keys_list = [
             ("Esc", "close", Action::CloseSettings, false),
-            ("Tab", "field", Action::Focus(Field::Network), false),
-            ("↑↓", "network", Action::PickNet(0), false),
+            ("Tab", "field", Action::Hint, false),
+            ("↑↓", "network", Action::Hint, false),
             ("Enter", "connect", Action::Connect, false),
             ("F5", "scan", Action::Scan, false),
         ];
@@ -391,7 +390,7 @@ fn draw_power(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
             cell.set_symbol("┃").set_fg(TITLE);
         }
     }
-    let g = Rect { x: inner.x, y: inner.y + 2, width: inner.width, height: inner.height - 2 };
+    let g = Rect { x: inner.x, y: inner.y + 2, width: inner.width, height: inner.height.saturating_sub(2) };
     graph(f.buffer_mut(), g, t.power_hist.iter().map(|p| p / scale));
 }
 
@@ -434,7 +433,7 @@ fn draw_swr(f: &mut Frame, area: Rect, t: &Tuner, app: &App) {
             cell.set_symbol("┃").set_fg(TITLE);
         }
     }
-    let g = Rect { x: inner.x, y: inner.y + 2, width: inner.width, height: inner.height - 2 };
+    let g = Rect { x: inner.x, y: inner.y + 2, width: inner.width, height: inner.height.saturating_sub(2) };
     graph(f.buffer_mut(), g, t.swr_hist.iter().map(|s| if *s == 0.0 { 0.0 } else { (s - 1.0) / 2.0 }));
 }
 
@@ -651,7 +650,9 @@ fn draw_key_list(f: &mut Frame, area: Rect, keys: &[(&str, &str, Action, bool)],
         buf.set_string(x, area.y, " ", Style::new().bg(bg));
         buf.set_string(x + 1, area.y, key, Style::new().fg(HI).bg(bg).add_modifier(Modifier::BOLD));
         buf.set_string(x + 1 + key.chars().count() as u16, area.y, format!(" {name} "), Style::new().fg(MAIN_FG).bg(bg));
-        hits.areas.push((Rect { x, y: area.y, width, height: 1 }, action));
+        if action != Action::Hint {
+            hits.areas.push((Rect { x, y: area.y, width, height: 1 }, action));
+        }
         x += width + gap;
     }
 }
@@ -1146,7 +1147,7 @@ fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
         let style_on = a.confirm_reset;
         let text = format!(" {label_reset} ");
         let style = if style_on { Style::new().fg(TITLE).bg(HI).add_modifier(Modifier::BOLD) } else { Style::new().fg(TITLE).bg(DIV) };
-        let x = inner.x + inner.width - bw - 1;
+        let x = (inner.x + inner.width).saturating_sub(bw + 1);
         buf.set_string(x, y0, &text, style);
         hits.areas.push((Rect { x, y: y0, width: bw, height: 1 }, Action::AtuReset));
     }
@@ -1164,7 +1165,7 @@ fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
     // a scroll bar on the right, two columns wide for a finger
     let bar = items.len() > visible && visible > 1;
     let bar_w: u16 = if bar { 2 } else { 0 };
-    let iw = iw - bar_w as usize;
+    let iw = iw.saturating_sub(bar_w as usize);
     if bar {
         let bx = inner.x + inner.width - bar_w;
         let thumb = (visible * visible / items.len()).max(1);
@@ -1197,7 +1198,7 @@ fn draw_atu(f: &mut Frame, body: Rect, t: &Tuner, app: &App, hits: &mut Hits) {
                 buf.set_string(inner.x + 1, y, if picked { "▸" } else { " " }, base.fg(HI));
                 buf.set_string(inner.x + 3, y, format!("{:02X}", c.cell), base.fg(INACTIVE));
                 buf.set_string(inner.x + 6, y, &name, base.fg(if picked { TITLE } else { MAIN_FG }));
-                let rx = inner.x + iw as u16 - right.chars().count() as u16;
+                let rx = inner.x + (iw as u16).saturating_sub(right.chars().count() as u16);
                 buf.set_string(rx, y, format!("{value}  "), base.fg(TITLE));
                 buf.set_string(rx + value.chars().count() as u16 + 2, y, format!("{raw:>5} "), base.fg(GRAPH_TEXT));
                 hits.areas.push((Rect { x: inner.x, y, width: iw as u16, height: 1 }, Action::AtuPick(*i as u8)));
