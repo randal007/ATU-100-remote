@@ -101,6 +101,12 @@ Both branches:
    swapped. He has flashed this board from Windows before and is trying
    there next; the hex comes from GitHub (both branches use the same file
    name, so rename on download). No backup of the stock chip read yet.
+   **Then flashed from Windows** with the standalone PICkit 3 Programmer
+   3.1 (tune-research hex). His OLED shows a thin junk line on the far left:
+   most likely an SH1106 (132 columns) with cell 08 ("OLED columns left")
+   below 02, so `oled_init`'s clear misses 2 columns (type 05 mirrors them
+   to the left). To do once the serial link is up: read cell 08 in atutop
+   (e) and set it to 02.
    He decided to keep the display on the PIC (deleting it would free about
    3500-4000 words for the search, and free the PROG header for the serial
    link; brainstorm only, parked).
