@@ -90,6 +90,20 @@ Both branches:
    installed for him), check display/buttons/serial with atutop, then tune
    on the real antennas, each branch's hex in turn. Advise tuning with
    5-10 W (below ~2 W every search stops short: the reflected diode's knee).
+   **2026-11-04, first try on Linux, no luck:** MPLAB IPE 6.20 installed
+   (`/opt/microchip/mplabx/v6.20`, IPE + 8-bit only; `ipecmd.sh` must run
+   from its own folder). The PICkit 3 (04d8:900a) is seen and answers.
+   Powered from the PICkit (`-W5.0`): "The target circuit may require more
+   power than the debug tool can provide", Connection Failed. Tuner on its
+   own 12 V, PICkit power off: Connection Failed with no reason given, the
+   IPE window only says it cannot connect. Not yet checked: OLED unplugged
+   while programming, 5 V on PROG pin 2, the header's printed labels, DAT/CLK
+   swapped. He has flashed this board from Windows before and is trying
+   there next; the hex comes from GitHub (both branches use the same file
+   name, so rename on download). No backup of the stock chip read yet.
+   He decided to keep the display on the PIC (deleting it would free about
+   3500-4000 words for the search, and free the PROG header for the serial
+   link; brainstorm only, parked).
 2. **ESP32 bridge on the board** when the parts arrive: `esp32/build.sh`,
    upload; check opening the native USB port does not reset it (DTR/RTS),
    Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
