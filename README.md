@@ -101,6 +101,12 @@ wires down. Clone boards may be laid out differently.
 
 ![PIC pins 9 and 10](docs/atu100_ra6_ra7.png)
 
+<img src="docs/build/pic-ra6-ra7-wires.jpg" alt="Fine wires soldered to PIC pins 9 and 10" width="400">
+
+The author's tuner: two thin wires on the pin 9 and 10 pads, held down with
+conformal coating, then a twisted pair to the bridge. Clean the flux off
+afterwards with isopropyl alcohol: these pins are 0.65 mm apart.
+
 - **Fit a 10 kΩ pull-up from pin 10 (RA6) to the partner's supply** (5 V for
   a Mega, 3.3 V for an ESP32). Port A has no internal pull-ups; without one
   a disconnected or unpowered partner leaves the input floating inside an
@@ -669,6 +675,20 @@ It sits between the tuner and everything else:
 Not D6/D7 for the tuner: they are the ESP32-S3's console pins, where it
 prints its start-up text at 115200 baud on every reset, which the tuner
 would read as garbage.
+
+The author's bridge: the XIAO on a scrap of perfboard with the divider and
+pull-up resistors, screw terminals for the tuner's two serial lines and
+ground, on a 3D-printed mount inside the amplifier's case, USB to a panel
+socket. Inside an aluminium case the small Wi-Fi antenna is shielded: check
+the range with the lids on, and use a U.FL to SMA lead and an outside
+antenna if it is weak.
+
+| | |
+|---|---|
+| <img src="docs/build/build-overview.jpg" alt="Tuner and bridge in the case" width="300"> | <img src="docs/build/xiao-board-top.jpg" alt="XIAO on perfboard, top" width="300"> |
+| Tuner and bridge in the case | The bridge board |
+| <img src="docs/build/xiao-board-underside.jpg" alt="Perfboard underside with the resistors" width="300"> | |
+| Underside: the divider and pull-up | |
 
 Build: `esp32/build.sh`, which builds atutop for the browser, packs it
 into `web_files.h` (`esp32/make_web_files.py`) and compiles the firmware
