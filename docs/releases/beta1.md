@@ -62,9 +62,11 @@ waking the display, the 9999 W limit). The README has the full list.
 | | |
 |---|---|
 | <img src="https://raw.githubusercontent.com/randal007/ATU-100-remote/beta1/docs/build/build-overview.jpg" width="300"> | <img src="https://raw.githubusercontent.com/randal007/ATU-100-remote/beta1/docs/build/xiao-board-top.jpg" width="300"> |
-| Tuner and bridge inside the amplifier | The bridge board |
+| Tuner and bridge inside the tuner's case | The bridge board |
 | <img src="https://raw.githubusercontent.com/randal007/ATU-100-remote/beta1/docs/build/xiao-board-underside.jpg" width="300"> | <img src="https://raw.githubusercontent.com/randal007/ATU-100-remote/beta1/docs/build/pic-ra6-ra7-wires.jpg" width="300"> |
 | Underside: the divider and pull-up | The two serial wires on PIC pins 9 and 10 |
+| <img src="https://raw.githubusercontent.com/randal007/ATU-100-remote/tune-research/docs/build/tuner-antenna-outside.jpg" width="300"> | |
+| Closed up, the Wi-Fi antenna on the outside of the case | |
 
 ## Downloads
 
@@ -106,8 +108,9 @@ waking the display, the 9999 W limit). The README has the full list.
   changes and every search stops short.
 - **Not tried yet on real hardware:** the bridge on a home Wi-Fi network,
   the Arduino Mega port, a 7805 powering the bridge.
-- **Inside a metal case** the XIAO's small Wi-Fi antenna is shielded: use a
-  U.FL to SMA lead and an outside antenna if the range is poor.
+- **Inside a metal case** the XIAO's small Wi-Fi antenna is shielded: put
+  it on the outside of the case (I stuck mine on top, lead through a small
+  hole), or use a U.FL to SMA lead and an SMA antenna.
 - The bridge's web page and port 7000 have no password. Change
   `HOTSPOT_PASS` in the firmware if others nearby might know the default.
 

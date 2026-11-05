@@ -681,17 +681,17 @@ would read as garbage.
 
 The author's bridge: the XIAO on a scrap of perfboard with the divider and
 pull-up resistors, screw terminals for the tuner's two serial lines and
-ground, on a 3D-printed mount inside the amplifier's case, USB to a panel
-socket. Inside an aluminium case the small Wi-Fi antenna is shielded: check
-the range with the lids on, and use a U.FL to SMA lead and an outside
-antenna if it is weak.
+ground, on a 3D-printed mount inside the tuner's own case, USB to a panel
+socket. Inside an aluminium case the small Wi-Fi antenna is shielded: the
+author's flat antenna is stuck on the outside of the case, its lead through
+a small hole (a U.FL to SMA lead and an SMA antenna also work).
 
 | | |
 |---|---|
 | <img src="docs/build/build-overview.jpg" alt="Tuner and bridge in the case" width="300"> | <img src="docs/build/xiao-board-top.jpg" alt="XIAO on perfboard, top" width="300"> |
 | Tuner and bridge in the case | The bridge board |
-| <img src="docs/build/xiao-board-underside.jpg" alt="Perfboard underside with the resistors" width="300"> | |
-| Underside: the divider and pull-up | |
+| <img src="docs/build/xiao-board-underside.jpg" alt="Perfboard underside with the resistors" width="300"> | <img src="docs/build/tuner-antenna-outside.jpg" alt="The tuner closed, Wi-Fi antenna on the case" width="300"> |
+| Underside: the divider and pull-up | Closed up, the Wi-Fi antenna on the outside |
 
 Build: `esp32/build.sh`, which builds atutop for the browser, packs it
 into `web_files.h` (`esp32/make_web_files.py`) and compiles the firmware
