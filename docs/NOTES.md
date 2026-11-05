@@ -102,6 +102,11 @@ Both branches:
    swapped. He has flashed this board from Windows before and is trying
    there next; the hex comes from GitHub (both branches use the same file
    name, so rename on download). No backup of the stock chip read yet.
+   **2026-11-05: build photos in the README** (docs/build/, resized, metadata
+   stripped). From the photos: the bridge sits inside the aluminium case, so
+   check Wi-Fi with the lids on (U.FL to SMA + outside antenna if weak); clean
+   the burnt flux around PIC pins 9/10 with IPA; a ferrite on the coiled USB
+   lead inside the case.
    **2026-11-05: tested with RF from the X6100, through atutop and the web
    page (hotspot too): everything works, no issues found.** One problem on
    the radio's side: the X6100 folds its power back on high SWR while the
