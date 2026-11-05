@@ -23,10 +23,13 @@ tuner.
 - A PC simulator that runs the real firmware code, and a simulated ESP32
   bridge, so all of it can be tried without hardware.
 
-> **Status, October 2026:** everything here has been tested in the
-> simulator only. Neither the tuner firmware nor the ESP32 bridge has run
-> on real hardware or been used on the air yet. Keep the backup described
-> under [Installing](#installing) so you can go back to your old firmware.
+> **Status, November 2026: beta 1.** The display, buttons, serial link,
+> atutop and the ESP32 bridge are the same as on `tune-research`, which has
+> been flashed on the author's ATU-100 EXT and tested on the air. This
+> branch's own searches (N7DDC's and the log grid) have not been tried on a
+> real tuner yet: comparing them is what this branch is for. Keep the
+> backup described under [Installing](#installing) to go back to your old
+> firmware.
 
 This is the `display-buttons-uart` branch of
 [randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote), with
@@ -748,9 +751,8 @@ The ESP32 bridge is `esp32/atu100_bridge/atu100_bridge.ino`, with
 
 ## Limitations and ideas
 
-- Tested only in the simulator so far: the tuner firmware, the ESP32 bridge,
-  and atutop against them. The browser version has been tried on a real
-  phone (Android) against the simulated bridge.
+- Only the `tune-research` hex has been on a real tuner so far; this
+  branch's searches are untested on the air.
 - Relay settling and other software delays run about 20% longer than set,
   because the serial interrupt takes part of the CPU. Harmless; could be
   made exact from the timer.
