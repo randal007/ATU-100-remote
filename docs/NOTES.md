@@ -102,6 +102,14 @@ Both branches:
    swapped. He has flashed this board from Windows before and is trying
    there next; the hex comes from GitHub (both branches use the same file
    name, so rename on download). No backup of the stock chip read yet.
+   **2026-11-05: tested with RF from the X6100, through atutop and the web
+   page (hotspot too): everything works, no issues found.** One problem on
+   the radio's side: the X6100 folds its power back on high SWR while the
+   search steps through bad settings, the power drops below "Tunes from"
+   (cell 05) and the tune stops, left at a high SWR. Ideas, none tried:
+   "Tunes from" 1 W, a 3-6 dB pad (tuner protection) between radio and
+   tuner during tunes, an X6100 setting for its SWR protection, or letting
+   the search wait for the power to come back instead of stopping.
    **2026-11-04 evening: the tuner link works on the real tuner** (atutop
    over USB through the XIAO: status, Tune, Bypass, every relay; no RF yet).
    The OLED line was cell 08 = 02 on his 0.96" SSD1306: 00 fixed it (02 is
