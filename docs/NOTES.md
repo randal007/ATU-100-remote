@@ -102,6 +102,10 @@ Both branches:
    swapped. He has flashed this board from Windows before and is trying
    there next; the hex comes from GitHub (both branches use the same file
    name, so rename on download). No backup of the stock chip read yet.
+   **2026-11-04 evening: the tuner link works on the real tuner** (atutop
+   over USB through the XIAO: status, Tune, Bypass, every relay; no RF yet).
+   The OLED line was cell 08 = 02 on his 0.96" SSD1306: 00 fixed it (02 is
+   for 1.3" SH1106 displays; README table says so).
    **Then flashed from Windows** with the standalone PICkit 3 Programmer
    3.1 (tune-research hex). His OLED shows a thin junk line on the far left:
    most likely an SH1106 (132 columns) with cell 08 ("OLED columns left")

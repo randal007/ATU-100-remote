@@ -274,7 +274,7 @@ provides it, with `{"Set": ...}`, with `atu100.py -c s`, or in
 | 04 | Auto mode tunes above this SWR | 13 (1.3) |
 | 05 | Minimum power to tune, W (tens of W in high power mode) | 05 |
 | 06 | Maximum power to tune, 00 = no limit | 00 |
-| 07, 08 | OLED position, rows down and columns left | 01, 02 (00, 02 in this hex) |
+| 07, 08 | OLED position, rows down and columns left. Columns left: **00 for a 0.96" OLED** (SSD1306, 128 columns), **02 for a 1.3" OLED** (SH1106, 132 columns); the wrong one leaves a thin line of junk down one edge | 01, 02 (00, 02 in this hex) |
 | 09 | Do not tune if the SWR starts above this, 00 = always tune | 00 |
 | 0A, 0C | Number of inductors, capacitors (05 to 07) | 07, 07 |
 | 0B, 0D | 01 if the inductors, capacitors have linear steps | 00, 00 |
