@@ -676,7 +676,11 @@ with `arduino-cli` (the esp32 boards package; the ArduinoJson and
 WebSockets libraries: `arduino-cli lib install ArduinoJson WebSockets`).
 Without `web_files.h` the firmware still builds, and `/` says so. Upload
 over USB with `arduino-cli upload -b esp32:esp32:XIAO_ESP32S3_Plus -p
-/dev/ttyACM0 esp32/atu100_bridge`. **Not yet tried on the board.**
+/dev/ttyACM0 esp32/atu100_bridge`. If the port belongs to `root:uucp` and the
+upload says "Permission denied", a udev rule gives it to whoever is logged in:
+`SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", TAG+="uaccess"` in
+`/etc/udev/rules.d/70-esp32-serial.rules`. **Uploaded and answering over
+USB; the tuner link and Wi-Fi are not yet tried on the board.**
 
 ## Building
 

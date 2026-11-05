@@ -69,8 +69,9 @@ Both branches:
   (JSON lines only), Wi-Fi settings over USB or from its hotspot,
   hotspot ATU100-setup / hamradio / 192.168.73.1 (always-on option),
   WebSocket 81 + atutop's browser files (web_files.h, gitignored), /lite,
-  /setup. Compiles (58% of 2 MB with the browser files). **Untested on
-  hardware.** Simulator: `test/esp32_sim.py` (reference for the messages;
+  /setup. Compiles (58% of 2 MB with the browser files). **On his XIAO
+  since 2026-11-04: uploads and answers `Info` over USB; tuner link and
+  Wi-Fi not tried yet.** Simulator: `test/esp32_sim.py` (reference for the messages;
   web 8080 / WS 8081; ATU100_SIM_LAN=1 for phones).
 - **Mega sketch** (`arduino/atu100_bridge`): compiles for the Mega
   (`arduino-cli compile -b arduino:avr:mega`, core installed 2026-10-24).
@@ -110,9 +111,16 @@ Both branches:
    He decided to keep the display on the PIC (deleting it would free about
    3500-4000 words for the search, and free the PROG header for the serial
    link; brainstorm only, parked).
-2. **ESP32 bridge on the board** when the parts arrive: `esp32/build.sh`,
-   upload; check opening the native USB port does not reset it (DTR/RTS),
-   Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
+2. **ESP32 bridge on the board**: built, uploaded and answering over USB
+   (2026-11-04; udev rule `/etc/udev/rules.d/70-esp32-serial.rules` gives
+   the port to the logged-in user, it is root:uucp otherwise). Opening the
+   port with DTR/RTS left alone does not reset it; dropping DTR before RTS
+   (pyserial setting both False) does. atutop connected over USB. He has
+   wired the XIAO on a small board with the dividers and the pull-up, wires
+   to RA6/RA7/GND soldered (conformal coating as strain relief). Next, the
+   "official test": the tuner link through atutop over USB, then cell 08
+   (OLED line), then Wi-Fi with the antenna on (no antenna: the scan finds
+   nothing). Still to check: Wi-Fi join, hotspot + setup page, atutop over USB, TCP and the browser,
    the Mega port; and from the second review: a shared Wi-Fi scan, the
    hotspot lingering 30 s after always-on is turned off, no background
    retries after a failed join.
