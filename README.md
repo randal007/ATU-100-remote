@@ -24,10 +24,13 @@ tuner.
 - A PC simulator that runs the real firmware code, and a simulated ESP32
   bridge, so all of it can be tried without hardware.
 
-> **Status, October 2026:** everything here has been tested in the
-> simulator only. Neither the tuner firmware nor the ESP32 bridge has run
-> on real hardware or been used on the air yet. Keep the backup described
-> under [Installing](#installing) so you can go back to your old firmware.
+> **Status, November 2026: beta 1.** Flashed on the author's ATU-100 EXT
+> and tested on the air with a Xiegu X6100: tuning, the display and
+> buttons, and atutop over USB and through the ESP32 bridge's web page and
+> hotspot all work. Not yet tried: the bridge on a home Wi-Fi network, the
+> Arduino Mega port, powering the bridge from a 7805. It has been on one
+> tuner only, so keep the backup described under [Installing](#installing)
+> to go back to your old firmware.
 
 This is the `tune-research` branch of
 [randal007/ATU-100-remote](https://github.com/randal007/ATU-100-remote), with
@@ -699,8 +702,9 @@ over USB with `arduino-cli upload -b esp32:esp32:XIAO_ESP32S3_Plus -p
 /dev/ttyACM0 esp32/atu100_bridge`. If the port belongs to `root:uucp` and the
 upload says "Permission denied", a udev rule gives it to whoever is logged in:
 `SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", TAG+="uaccess"` in
-`/etc/udev/rules.d/70-esp32-serial.rules`. **Uploaded and answering over
-USB; the tuner link and Wi-Fi are not yet tried on the board.**
+`/etc/udev/rules.d/70-esp32-serial.rules`. **On the author's tuner since
+November 2026: USB, the web page and the hotspot work; joining a home
+network is not tried yet.**
 
 ## Building
 
@@ -797,9 +801,12 @@ The ESP32 bridge is `esp32/atu100_bridge/atu100_bridge.ino`, with
 
 ## Limitations and ideas
 
-- Tested only in the simulator so far: the tuner firmware, the ESP32 bridge,
-  and atutop against them. The browser version has been tried on a real
-  phone (Android) against the simulated bridge.
+- Tried on one tuner so far (the author's, with a Xiegu X6100). The X6100
+  turns its power down when the SWR is high, so while the search steps
+  through bad settings the power can drop below "Tunes from" (cell 05) and
+  the tune stops at a high SWR. Ideas, not tried yet: "Tunes from" at 1 W,
+  a 3-6 dB attenuator between radio and tuner for tuning, or the radio's
+  own SWR protection setting.
 - Relay settling and other software delays run about 20% longer than set,
   because the serial interrupt takes part of the CPU. Harmless; could be
   made exact from the timer.

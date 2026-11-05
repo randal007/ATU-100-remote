@@ -86,6 +86,11 @@ Both branches:
 
 ### Next
 
+0. **Beta 1 released 2026-11-05** (tags `beta1` on tune-research,
+   `beta1-display-buttons-uart`): both hexes, the ESP32 merged image and
+   atutop for Linux; notes in docs/releases/beta1.md, Facebook post in
+   ~/Pictures/atu100-beta1-facebook/. Issues and Discussions are off on
+   the repo; reports come through Facebook for now.
 1. **First flash** (he is getting ready to test): back up the tuner's
    EEPROM and flash with the PICkit 3 (MPLAB IPE 6.20 or older, can be
    installed for him), check display/buttons/serial with atutop, then tune
